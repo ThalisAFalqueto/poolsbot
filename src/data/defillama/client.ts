@@ -14,6 +14,7 @@ export type DefiLlamaPool = {
   apyPct30D: number | null;
   stablecoin: boolean;
   ilRisk: string;
+  outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
 };
 
 type YieldsResponse = {
@@ -49,14 +50,16 @@ export async function searchPools(params: {
   project?: string;
   symbol?: string;
   limit?: number;
+  includeOutliers?: boolean;
 }): Promise<DefiLlamaPool[]> {
   const pools = await fetchAllPools();
-  const { chain, project, symbol, limit = 10 } = params;
+  const { chain, project, symbol, limit = 10, includeOutliers = false } = params;
 
   return pools
     .filter((p) => !chain || p.chain.toLowerCase() === chain.toLowerCase())
     .filter((p) => !project || p.project.toLowerCase().includes(project.toLowerCase()))
     .filter((p) => !symbol || p.symbol.toLowerCase().includes(symbol.toLowerCase()))
+    .filter((p) => includeOutliers || !p.outlier)
     .sort((a, b) => b.apy - a.apy)
     .slice(0, limit);
 }

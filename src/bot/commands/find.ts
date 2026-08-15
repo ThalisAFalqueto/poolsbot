@@ -19,7 +19,8 @@ export async function findCommand(ctx: CommandContext<Context>) {
   }
 
   const lines = pools.map(
-    (p) => `• ${p.symbol} (${p.project}) — APY ${p.apy.toFixed(2)}% — id: ${p.pool}`
+    (p) =>
+      `• ${p.symbol} (${p.project}) — APY ${p.apy.toFixed(2)}% — TVL $${p.tvlUsd.toLocaleString("pt-BR")} — id: ${p.pool}`
   );
   await ctx.reply(["Top pools encontrados:", ...lines, "", "Use /pool <id> para detalhes."].join("\n"));
 }
