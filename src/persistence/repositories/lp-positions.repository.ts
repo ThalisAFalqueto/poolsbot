@@ -1,7 +1,8 @@
 import { and, eq, isNotNull, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
-import { lpPositionIlBaseline, lpPositions, lpPositionState, users } from "../schema/index.js";
+import { lpPositionIlAlertState, lpPositionIlBaseline, lpPositions, lpPositionState, users } from "../schema/index.js";
 import { decideBaseline } from "../../domain/lp-rebalance/il-baseline.js";
+import type { IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
 import type { OnchainPosition, PositionState } from "../../domain/lp-rebalance/types.js";
 
 export type UserWithWallet = { userId: number; telegramChatId: string; walletAddress: string };
@@ -176,4 +177,33 @@ export async function syncIlBaseline(
     .onConflictDoUpdate({ target: lpPositionIlBaseline.lpPositionId, set: values });
 
   return { liquidity: current.liquidity, sqrtPriceX96: current.sqrtPriceX96, tick: current.tick, recordedAt, wasReset };
+}
+
+const DEFAULT_IL_ALERT_STATE: IlAlertState = { status: "ok", triggeredAt: null, lastNotifiedAt: null };
+
+// Diferente de lp_position_state (sempre criado junto com a posição em
+// upsertPositions), o estado de alerta de IL não tem uma linha garantida —
+// retorna o default "ok" se ainda não foi avaliado nenhuma vez.
+export async function getIlAlertState(lpPositionId: number): Promise<IlAlertState> {
+  const [row] = await db
+    .select()
+    .from(lpPositionIlAlertState)
+    .where(eq(lpPositionIlAlertState.lpPositionId, lpPositionId))
+    .limit(1);
+  if (!row) return DEFAULT_IL_ALERT_STATE;
+  return { status: row.status, triggeredAt: row.triggeredAt, lastNotifiedAt: row.lastNotifiedAt };
+}
+
+export async function updateIlAlertState(lpPositionId: number, next: IlAlertState): Promise<void> {
+  const values = {
+    lpPositionId,
+    status: next.status,
+    triggeredAt: next.triggeredAt,
+    lastNotifiedAt: next.lastNotifiedAt,
+    updatedAt: new Date(),
+  };
+  await db
+    .insert(lpPositionIlAlertState)
+    .values(values)
+    .onConflictDoUpdate({ target: lpPositionIlAlertState.lpPositionId, set: values });
 }

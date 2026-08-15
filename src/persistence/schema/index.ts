@@ -191,3 +191,24 @@ export const lpPositionIlBaseline = pgTable(
     lpPositionIdx: uniqueIndex("lp_position_il_baseline_lp_position_id_idx").on(table.lpPositionId),
   })
 );
+
+// Estado de disparo do alerta de IL alto, espelhando lp_position_state (que
+// cobre a dimensão in/out-of-range) — mas pra dimensão de IL, independente.
+// Reaproveita alertStatusEnum (ok/triggered) já definido pro motor de
+// alertas do v1, mesmo domínio de valores.
+export const lpPositionIlAlertState = pgTable(
+  "lp_position_il_alert_state",
+  {
+    id: serial("id").primaryKey(),
+    lpPositionId: integer("lp_position_id")
+      .notNull()
+      .references(() => lpPositions.id, { onDelete: "cascade" }),
+    status: alertStatusEnum("status").notNull().default("ok"),
+    triggeredAt: timestamp("triggered_at"),
+    lastNotifiedAt: timestamp("last_notified_at"),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    lpPositionIdx: uniqueIndex("lp_position_il_alert_state_lp_position_id_idx").on(table.lpPositionId),
+  })
+);

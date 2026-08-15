@@ -100,6 +100,24 @@ export function formatIlLine(il: ImpermanentLossResult, wasReset: boolean, token
   return `IL desde que o poolsbot passou a monitorar esta posição (${since}${resetNote}): ${pct}% em ${token1Symbol} (não é a abertura on-chain real; não desconta fees ganhas)`;
 }
 
+export function formatIlAlertReason(
+  position: OnchainPosition,
+  il: ImpermanentLossResult,
+  kind: "triggered" | "reminder" | "recovered"
+): string {
+  const pct = (il.ilPct * 100).toFixed(2);
+  const pair = `${position.token0.symbol}/${position.token1.symbol}`;
+  const since = il.since.toLocaleDateString("pt-BR");
+  const prefix = {
+    triggered: "🚨 IL alto:",
+    reminder: "🔔 IL continua alto:",
+    recovered: "✅ IL normalizado:",
+  }[kind];
+
+  const body = `${prefix} posição ${pair} ${formatFee(position.fee)} (#${position.tokenId}) está em ${pct}% desde ${since} em ${position.token1.symbol} (não é a abertura on-chain real; não desconta fees ganhas).`;
+  return kind === "recovered" ? body : `${body}\n\nUse /positions para ver detalhes.`;
+}
+
 export type FormatReasonFn = (position: OnchainPosition, kind: PositionNotification["kind"], outOfRangeSince: Date | null) => string;
 
 export function formatReason(position: OnchainPosition, kind: PositionNotification["kind"], outOfRangeSince: Date | null): string {

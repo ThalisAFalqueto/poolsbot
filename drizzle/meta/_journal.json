@@ -22,6 +22,13 @@
       "when": 1786825943758,
       "tag": "0002_fine_marten_broadcloak",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786827091306,
+      "tag": "0003_groovy_mattie_franklin",
+      "breakpoints": true
     }
   ]
 }
