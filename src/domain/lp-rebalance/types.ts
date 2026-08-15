@@ -10,6 +10,7 @@ export type OnchainPosition = {
   tickUpper: number;
   currentTick: number;
   sqrtPriceX96: bigint;
+  liquidity: bigint;
   token0: TokenMeta;
   token1: TokenMeta;
 };

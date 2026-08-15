@@ -1,3 +1,4 @@
+import type { ImpermanentLossResult } from "./calculate-il.js";
 import { sqrtPriceX96ToPrice, tickToPrice } from "./price-math.js";
 import { suggestRange } from "./range-suggestion.js";
 import type { OnchainPosition, PositionNotification } from "./types.js";
@@ -87,6 +88,16 @@ export function formatBackInRangeReason(position: OnchainPosition): string {
     "",
     CALL_TO_ACTION,
   ].join("\n");
+}
+
+// Deixa explícito que NÃO é IL desde a abertura real da posição (só desde
+// que o poolsbot passou a observá-la), e que fees ganhas não estão
+// compensando o número — evita que o usuário leia isso como P&L líquido.
+export function formatIlLine(il: ImpermanentLossResult, wasReset: boolean, token1Symbol: string): string {
+  const pct = (il.ilPct * 100).toFixed(2);
+  const since = il.since.toLocaleDateString("pt-BR");
+  const resetNote = wasReset ? " — baseline resetado por alteração na liquidez da posição" : "";
+  return `IL desde que o poolsbot passou a monitorar esta posição (${since}${resetNote}): ${pct}% em ${token1Symbol} (não é a abertura on-chain real; não desconta fees ganhas)`;
 }
 
 export type FormatReasonFn = (position: OnchainPosition, kind: PositionNotification["kind"], outOfRangeSince: Date | null) => string;

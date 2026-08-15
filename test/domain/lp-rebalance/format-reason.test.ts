@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatBoundaryPrice, formatOutOfRangeReason } from "../../../src/domain/lp-rebalance/format-reason.js";
+import { formatBoundaryPrice, formatIlLine, formatOutOfRangeReason } from "../../../src/domain/lp-rebalance/format-reason.js";
+import type { ImpermanentLossResult } from "../../../src/domain/lp-rebalance/calculate-il.js";
 import type { OnchainPosition } from "../../../src/domain/lp-rebalance/types.js";
 
 describe("formatBoundaryPrice", () => {
@@ -35,6 +36,7 @@ describe("formatOutOfRangeReason", () => {
       tickUpper: 887220,
       currentTick: -200924,
       sqrtPriceX96: 2n ** 96n,
+      liquidity: 1_000_000_000n,
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
@@ -53,10 +55,49 @@ describe("formatOutOfRangeReason", () => {
       tickUpper: 50000, // teto real
       currentTick: 60000, // rompeu o teto
       sqrtPriceX96: 2n ** 96n,
+      liquidity: 1_000_000_000n,
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
     const reason = formatOutOfRangeReason(position);
     expect(reason).not.toMatch(/e\+\d\d/);
+  });
+});
+
+describe("formatIlLine", () => {
+  function makeIl(overrides: Partial<ImpermanentLossResult> = {}): ImpermanentLossResult {
+    return {
+      ilPct: -0.0234,
+      hodlValueToken1: 1000,
+      positionValueToken1: 976.6,
+      baselineAmount0: 1,
+      baselineAmount1: 500,
+      currentAmount0: 1.1,
+      currentAmount1: 450,
+      since: new Date("2026-08-01T00:00:00Z"),
+      ...overrides,
+    };
+  }
+
+  it("mostra a porcentagem de IL e a data do baseline", () => {
+    const line = formatIlLine(makeIl(), false, "USDC");
+    expect(line).toContain("-2.34%");
+    expect(line).toContain("USDC");
+  });
+
+  it("deixa claro que não é a abertura real e não desconta fees", () => {
+    const line = formatIlLine(makeIl(), false, "USDC");
+    expect(line).toContain("não é a abertura on-chain real");
+    expect(line).toContain("não desconta fees");
+  });
+
+  it("sinaliza quando o baseline foi resetado", () => {
+    const line = formatIlLine(makeIl(), true, "USDC");
+    expect(line).toContain("resetado por alteração na liquidez");
+  });
+
+  it("não sinaliza reset quando o baseline é o original", () => {
+    const line = formatIlLine(makeIl(), false, "USDC");
+    expect(line).not.toContain("resetado");
   });
 });

@@ -1,6 +1,8 @@
 import type { Address } from "viem";
 import { fetchPositionsForWallet } from "../../data/onchain/client.js";
+import { calculateImpermanentLoss } from "../../domain/lp-rebalance/calculate-il.js";
 import { evaluatePosition } from "../../domain/lp-rebalance/evaluate-position.js";
+import { formatIlLine } from "../../domain/lp-rebalance/format-reason.js";
 import { suggestRange } from "../../domain/lp-rebalance/range-suggestion.js";
 import type { PositionState } from "../../domain/lp-rebalance/types.js";
 import type { Signal } from "../../domain/signals/types.js";
@@ -10,9 +12,10 @@ import {
   deleteStalePositions,
   getPositionState,
   listUsersWithWallet,
+  syncIlBaseline,
+  toPositionUpsertInput,
   updatePositionState,
   upsertPositions,
-  type PositionUpsertInput,
 } from "../../persistence/repositories/lp-positions.repository.js";
 
 const CHAIN = "arbitrum";
@@ -27,22 +30,7 @@ export async function checkPositionsJob(): Promise<void> {
     try {
       const onchainPositions = await fetchPositionsForWallet(user.walletAddress as Address);
 
-      const upsertInputs: PositionUpsertInput[] = onchainPositions.map((p) => ({
-        userId: user.userId,
-        chain: CHAIN,
-        tokenId: p.tokenId.toString(),
-        poolAddress: p.poolAddress,
-        token0Address: p.token0.address,
-        token1Address: p.token1.address,
-        token0Symbol: p.token0.symbol,
-        token1Symbol: p.token1.symbol,
-        token0Decimals: p.token0.decimals,
-        token1Decimals: p.token1.decimals,
-        fee: p.fee,
-        tickLower: p.tickLower,
-        tickUpper: p.tickUpper,
-      }));
-
+      const upsertInputs = onchainPositions.map((p) => toPositionUpsertInput(user.userId, CHAIN, p));
       const upserted = await upsertPositions(upsertInputs);
       await deleteStalePositions(
         user.userId,
@@ -65,7 +53,28 @@ export async function checkPositionsJob(): Promise<void> {
         const { nextState, notification } = evaluatePosition({ position, state, now });
         await updatePositionState(record.id, nextState);
 
+        // syncIlBaseline roda pra TODA posição, não só quando há notificação
+        // — senão uma mudança de liquidez numa posição que continua in-range
+        // nunca seria detectada.
+        const baseline = await syncIlBaseline(record.id, {
+          liquidity: position.liquidity,
+          sqrtPriceX96: position.sqrtPriceX96,
+          tick: position.currentTick,
+        });
+
         if (!notification) continue;
+
+        const il = calculateImpermanentLoss({
+          liquidity: position.liquidity,
+          tickLower: position.tickLower,
+          tickUpper: position.tickUpper,
+          decimals0: position.token0.decimals,
+          decimals1: position.token1.decimals,
+          baselineSqrtPriceX96: baseline.sqrtPriceX96,
+          baselineRecordedAt: baseline.recordedAt,
+          currentSqrtPriceX96: position.sqrtPriceX96,
+        });
+        const reasonWithIl = `${notification.reason}\n\n${formatIlLine(il, baseline.wasReset, position.token1.symbol)}`;
 
         const suggestedAction: Signal["suggestedAction"] =
           notification.kind === "out_of_range" || notification.kind === "reminder"
@@ -82,7 +91,7 @@ export async function checkPositionsJob(): Promise<void> {
           type: "rebalance_lp",
           userId: String(user.userId),
           poolId: tokenId,
-          reason: notification.reason,
+          reason: reasonWithIl,
           suggestedAction,
           confidence: notification.confidence,
           createdAt: now,

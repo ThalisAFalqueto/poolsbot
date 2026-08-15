@@ -13,6 +13,7 @@ function makePosition(overrides: Partial<OnchainPosition> = {}): OnchainPosition
     tickUpper: 2000, // largura 1000, margem de recuperação = 100
     currentTick: 1500,
     sqrtPriceX96: 2n ** 96n,
+    liquidity: 1_000_000_000n,
     token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
     token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
     ...overrides,

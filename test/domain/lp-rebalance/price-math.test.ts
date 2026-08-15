@@ -3,8 +3,10 @@ import {
   isFullRangeLower,
   isFullRangeUpper,
   isInRange,
+  rawSqrtRatio,
   roundToSpacing,
   sqrtPriceX96ToPrice,
+  sqrtRatioAtTick,
   tickSpacingForFee,
   tickToPrice,
 } from "../../../src/domain/lp-rebalance/price-math.js";
@@ -41,6 +43,29 @@ describe("tickToPrice", () => {
   it("não estoura pra Infinity no tick máximo válido do Uniswap V3", () => {
     const price = tickToPrice(887272, 0, 0);
     expect(Number.isFinite(price)).toBe(true);
+  });
+});
+
+describe("rawSqrtRatio", () => {
+  it("sqrtPriceX96 = 2^96 (preço raw 1) dá sqrt ratio 1", () => {
+    expect(rawSqrtRatio(Q96)).toBeCloseTo(1, 10);
+  });
+
+  it("sqrtPriceX96 = 2 * 2^96 (preço raw 4) dá sqrt ratio 2", () => {
+    expect(rawSqrtRatio(2n * Q96)).toBeCloseTo(2, 8);
+  });
+});
+
+describe("sqrtRatioAtTick", () => {
+  it("é consistente com tickToPrice: sqrtRatioAtTick(t)^2 == tickToPrice(t, 0, 0)", () => {
+    const tick = 12345;
+    const sqrtRatio = sqrtRatioAtTick(tick);
+    const price = tickToPrice(tick, 0, 0);
+    expect(sqrtRatio * sqrtRatio).toBeCloseTo(price, 5);
+  });
+
+  it("tick 0 dá sqrt ratio 1", () => {
+    expect(sqrtRatioAtTick(0)).toBeCloseTo(1, 10);
   });
 });
 

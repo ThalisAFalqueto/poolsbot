@@ -1,7 +1,8 @@
 import { and, eq, isNotNull, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
-import { lpPositions, lpPositionState, users } from "../schema/index.js";
-import type { PositionState } from "../../domain/lp-rebalance/types.js";
+import { lpPositionIlBaseline, lpPositions, lpPositionState, users } from "../schema/index.js";
+import { decideBaseline } from "../../domain/lp-rebalance/il-baseline.js";
+import type { OnchainPosition, PositionState } from "../../domain/lp-rebalance/types.js";
 
 export type UserWithWallet = { userId: number; telegramChatId: string; walletAddress: string };
 
@@ -106,4 +107,73 @@ export async function updatePositionState(lpPositionId: number, next: PositionSt
       updatedAt: new Date(),
     })
     .where(eq(lpPositionState.lpPositionId, lpPositionId));
+}
+
+// Helper compartilhado entre check-positions.job.ts e bot/commands/positions.ts,
+// pra não duplicar a montagem do PositionUpsertInput nos dois call sites.
+export function toPositionUpsertInput(userId: number, chain: string, p: OnchainPosition): PositionUpsertInput {
+  return {
+    userId,
+    chain,
+    tokenId: p.tokenId.toString(),
+    poolAddress: p.poolAddress,
+    token0Address: p.token0.address,
+    token1Address: p.token1.address,
+    token0Symbol: p.token0.symbol,
+    token1Symbol: p.token1.symbol,
+    token0Decimals: p.token0.decimals,
+    token1Decimals: p.token1.decimals,
+    fee: p.fee,
+    tickLower: p.tickLower,
+    tickUpper: p.tickUpper,
+  };
+}
+
+export type IlBaseline = { liquidity: bigint; sqrtPriceX96: bigint; tick: number; recordedAt: Date; wasReset: boolean };
+
+export async function getIlBaseline(lpPositionId: number): Promise<IlBaseline | null> {
+  const [row] = await db
+    .select()
+    .from(lpPositionIlBaseline)
+    .where(eq(lpPositionIlBaseline.lpPositionId, lpPositionId))
+    .limit(1);
+  if (!row) return null;
+  return {
+    liquidity: BigInt(row.liquidity),
+    sqrtPriceX96: BigInt(row.sqrtPriceX96),
+    tick: row.tick,
+    recordedAt: row.recordedAt,
+    wasReset: row.wasReset,
+  };
+}
+
+// Lê o baseline existente, decide via decideBaseline (domínio puro), e grava
+// create/reset quando necessário. Deve ser chamado pra TODA posição em todo
+// ciclo (não só quando há notificação) — senão uma mudança de liquidez numa
+// posição que continua in-range nunca seria detectada.
+export async function syncIlBaseline(
+  lpPositionId: number,
+  current: { liquidity: bigint; sqrtPriceX96: bigint; tick: number }
+): Promise<IlBaseline> {
+  const existing = await getIlBaseline(lpPositionId);
+  const action = decideBaseline(existing?.liquidity ?? null, current.liquidity);
+  if (action === "keep" && existing) return existing;
+
+  const wasReset = action === "reset";
+  const recordedAt = new Date();
+  const values = {
+    lpPositionId,
+    liquidity: current.liquidity.toString(),
+    sqrtPriceX96: current.sqrtPriceX96.toString(),
+    tick: current.tick,
+    wasReset,
+    recordedAt,
+  };
+
+  await db
+    .insert(lpPositionIlBaseline)
+    .values(values)
+    .onConflictDoUpdate({ target: lpPositionIlBaseline.lpPositionId, set: values });
+
+  return { liquidity: current.liquidity, sqrtPriceX96: current.sqrtPriceX96, tick: current.tick, recordedAt, wasReset };
 }

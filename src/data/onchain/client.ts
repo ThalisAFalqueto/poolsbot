@@ -126,6 +126,7 @@ export async function fetchPositionsForWallet(owner: Address): Promise<OnchainPo
         tickUpper: p.tickUpper,
         currentTick,
         sqrtPriceX96,
+        liquidity: p.liquidity,
         token0: { address: p.token0, decimals: t0.decimals, symbol: t0.symbol },
         token1: { address: p.token1, decimals: t1.decimals, symbol: t1.symbol },
       };

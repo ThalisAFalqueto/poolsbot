@@ -168,3 +168,26 @@ export const lpPositionState = pgTable(
     lpPositionIdx: uniqueIndex("lp_position_state_lp_position_id_idx").on(table.lpPositionId),
   })
 );
+
+// Baseline de IL: snapshot do preço + liquidez no momento em que o poolsbot
+// passou a observar essa CONFIGURAÇÃO da posição. Quase-imutável — só muda
+// (é resetada) quando a liquidez detectada diverge da liquidez salva aqui,
+// sinalizando add/remove liquidity feito fora do bot. wasReset diferencia
+// "baseline original" de "resetado ao menos uma vez" pra exibição honesta.
+export const lpPositionIlBaseline = pgTable(
+  "lp_position_il_baseline",
+  {
+    id: serial("id").primaryKey(),
+    lpPositionId: integer("lp_position_id")
+      .notNull()
+      .references(() => lpPositions.id, { onDelete: "cascade" }),
+    liquidity: text("liquidity").notNull(), // uint128 on-chain; texto evita overflow
+    sqrtPriceX96: text("sqrt_price_x96").notNull(), // uint160 on-chain; texto evita overflow
+    tick: integer("tick").notNull(), // não usado no cálculo; só debug/auditoria
+    wasReset: boolean("was_reset").notNull().default(false),
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    lpPositionIdx: uniqueIndex("lp_position_il_baseline_lp_position_id_idx").on(table.lpPositionId),
+  })
+);

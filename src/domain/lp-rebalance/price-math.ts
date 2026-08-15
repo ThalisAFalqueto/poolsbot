@@ -1,7 +1,7 @@
 // Conversões puras tick <-> preço para EXIBIÇÃO. Não são bit-exact com a
 // aritmética Q64.96 on-chain (não precisam ser: nada aqui assina transação).
 
-const Q96 = 2 ** 96;
+export const Q96 = 2 ** 96;
 
 // Preço (token1 por token0, em unidades humanas) direto do sqrtPriceX96 do
 // slot0() — mais preciso que passar pelo tick porque evita a exponenciação
@@ -9,6 +9,21 @@ const Q96 = 2 ** 96;
 export function sqrtPriceX96ToPrice(sqrtPriceX96: bigint, decimals0: number, decimals1: number): number {
   const raw = Number(sqrtPriceX96) / Q96;
   return raw * raw * 10 ** (decimals0 - decimals1);
+}
+
+// sqrt do preço RAW (sem ajuste de decimais): S = sqrtPriceX96 / 2^96. Usado
+// pela matemática de liquidity-math.ts, que opera nas fórmulas raw do
+// Uniswap V3 (o ajuste de decimais entra só no final, ao converter os
+// amounts pra unidades humanas).
+export function rawSqrtRatio(sqrtPriceX96: bigint): number {
+  return Number(sqrtPriceX96) / Q96;
+}
+
+// sqrt do preço RAW na fronteira de um tick — equivalente a
+// sqrt(tickToPrice(tick, 0, 0)), reaproveitando a mesma exponenciação em vez
+// de reimplementar 1.0001^(tick/2).
+export function sqrtRatioAtTick(tick: number): number {
+  return Math.sqrt(tickToPrice(tick, 0, 0));
 }
 
 // Preço (token1 por token0, em unidades humanas) na fronteira de um tick.
