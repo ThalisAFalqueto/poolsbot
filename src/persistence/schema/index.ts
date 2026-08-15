@@ -112,3 +112,59 @@ export const apyHistory = pgTable(
     poolIdRecordedAtIdx: index("apy_history_pool_id_recorded_at_idx").on(table.poolId, table.recordedAt),
   })
 );
+
+export const lpPositionStatusEnum = pgEnum("lp_position_status", ["in_range", "out_of_range"]);
+
+// Diferente de alertRules (só muda quando o usuário interage com o bot), a
+// "definição" de uma posição de LP pode mudar FORA do bot a qualquer
+// momento — abrir, fechar, ou transferir o NFT pra outra wallet. Por isso
+// esta tabela é RECONCILIADA a cada ciclo do scheduler (upsert do que está
+// ativo on-chain + delete de qualquer tokenId que não apareça mais no
+// conjunto ativo daquele usuário/chain), não só escrita sob comando do
+// usuário.
+export const lpPositions = pgTable(
+  "lp_positions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    chain: text("chain").notNull().default("arbitrum"),
+    tokenId: text("token_id").notNull(), // uint256 on-chain; texto evita overflow, mesmo padrão de poolId
+    poolAddress: text("pool_address").notNull(),
+    token0Address: text("token0_address").notNull(),
+    token1Address: text("token1_address").notNull(),
+    token0Symbol: text("token0_symbol").notNull(),
+    token1Symbol: text("token1_symbol").notNull(),
+    token0Decimals: integer("token0_decimals").notNull(),
+    token1Decimals: integer("token1_decimals").notNull(),
+    fee: integer("fee").notNull(), // hundredths of a bip: 500/3000/10000
+    tickLower: integer("tick_lower").notNull(),
+    tickUpper: integer("tick_upper").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    tokenIdChainIdx: uniqueIndex("lp_positions_token_id_chain_idx").on(table.tokenId, table.chain),
+    userIdx: index("lp_positions_user_id_idx").on(table.userId),
+  })
+);
+
+// Estado de disparo separado da definição, espelhando alertState — escrito a
+// cada ciclo de 15min, 1:1 com lp_positions.
+export const lpPositionState = pgTable(
+  "lp_position_state",
+  {
+    id: serial("id").primaryKey(),
+    lpPositionId: integer("lp_position_id")
+      .notNull()
+      .references(() => lpPositions.id, { onDelete: "cascade" }),
+    status: lpPositionStatusEnum("status").notNull().default("in_range"),
+    outOfRangeSince: timestamp("out_of_range_since"),
+    lastNotifiedAt: timestamp("last_notified_at"),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    lpPositionIdx: uniqueIndex("lp_position_state_lp_position_id_idx").on(table.lpPositionId),
+  })
+);

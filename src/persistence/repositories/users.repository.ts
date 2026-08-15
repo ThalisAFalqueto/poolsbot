@@ -21,3 +21,7 @@ export async function findOrCreateUserByTelegramChatId(chatId: string) {
   }
   return row;
 }
+
+export async function setWalletAddress(userId: number, walletAddress: string): Promise<void> {
+  await db.update(users).set({ walletAddress }).where(eq(users.id, userId));
+}

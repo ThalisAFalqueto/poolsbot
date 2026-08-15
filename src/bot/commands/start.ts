@@ -13,6 +13,8 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/alerts — lista seus alertas e o estado atual",
       "/unalert <id> — remove um alerta",
       "/yield <chain> [symbol] — ranking de pools por retorno ajustado a risco",
+      "/addwallet <endereço> — vincula sua wallet (só endereço público, nunca chave privada)",
+      "/positions — mostra suas posições de LP em Arbitrum e se estão dentro da faixa",
     ].join("\n")
   );
 }

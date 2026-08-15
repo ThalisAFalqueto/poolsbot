@@ -8,6 +8,8 @@ import { unwatchCommand } from "./commands/unwatch.js";
 import { alertsCommand } from "./commands/alerts.js";
 import { unalertCommand } from "./commands/unalert.js";
 import { yieldCommand } from "./commands/yield.js";
+import { addWalletCommand } from "./commands/addwallet.js";
+import { positionsCommand } from "./commands/positions.js";
 
 export function createBot(): Bot {
   const bot = new Bot(env.telegramBotToken);
@@ -20,6 +22,8 @@ export function createBot(): Bot {
   bot.command("alerts", alertsCommand);
   bot.command("unalert", unalertCommand);
   bot.command("yield", yieldCommand);
+  bot.command("addwallet", addWalletCommand);
+  bot.command("positions", positionsCommand);
 
   bot.catch((err) => {
     console.error("Erro não tratado no bot:", err.error);
