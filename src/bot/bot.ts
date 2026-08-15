@@ -7,6 +7,7 @@ import { watchCommand } from "./commands/watch.js";
 import { unwatchCommand } from "./commands/unwatch.js";
 import { alertsCommand } from "./commands/alerts.js";
 import { unalertCommand } from "./commands/unalert.js";
+import { yieldCommand } from "./commands/yield.js";
 
 export function createBot(): Bot {
   const bot = new Bot(env.telegramBotToken);
@@ -18,6 +19,7 @@ export function createBot(): Bot {
   bot.command("unwatch", unwatchCommand);
   bot.command("alerts", alertsCommand);
   bot.command("unalert", unalertCommand);
+  bot.command("yield", yieldCommand);
 
   bot.catch((err) => {
     console.error("Erro não tratado no bot:", err.error);

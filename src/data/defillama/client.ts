@@ -15,6 +15,8 @@ export type DefiLlamaPool = {
   stablecoin: boolean;
   ilRisk: string;
   il7d: number | null; // geralmente null na prática, mas presente pra alguns pools
+  sigma: number | null; // desvio-padrão histórico do APY — quanto menor, mais estável/previsível
+  apyMean30d: number | null; // média de APY dos últimos 30 dias — usado pra detectar picos transitórios
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
 };
 

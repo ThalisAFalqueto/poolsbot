@@ -10,7 +10,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/persistence/migrate.ts"
+    "db:migrate": "tsx src/persistence/migrate.ts",
+    "pm2:start": "npm run build && pm2 start dist/main.js --name poolsbot",
+    "pm2:restart": "npm run build && pm2 restart poolsbot",
+    "pm2:stop": "pm2 stop poolsbot",
+    "pm2:logs": "pm2 logs poolsbot"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -25,6 +29,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.10",
     "drizzle-kit": "^0.28.1",
+    "pm2": "^5.4.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

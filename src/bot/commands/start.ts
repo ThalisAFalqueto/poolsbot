@@ -12,6 +12,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/unwatch <id> — para de observar um pool",
       "/alerts — lista seus alertas e o estado atual",
       "/unalert <id> — remove um alerta",
+      "/yield <chain> [symbol] — ranking de pools por retorno ajustado a risco",
     ].join("\n")
   );
 }
