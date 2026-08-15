@@ -133,3 +133,48 @@ export async function fetchPositionsForWallet(owner: Address): Promise<OnchainPo
     })
     .filter((p): p is OnchainPosition => p !== null);
 }
+
+const MAX_UINT128 = 2n ** 128n - 1n; // convenção Uniswap pra "colete tudo que houver"
+
+export type UncollectedFees = { amount0: bigint; amount1: bigint };
+
+// Simula collect() (eth_call puro, sem enviar transação nem precisar de
+// chave privada) pra cada posição, em paralelo. Não dá pra agregar via
+// multicall3 como o resto deste arquivo: collect() exige msg.sender
+// autorizado (dono/operador) via isAuthorizedForToken, e dentro de um
+// multicall msg.sender seria o próprio contrato Multicall3, não o dono —
+// autorização falharia. Por isso são N eth_calls independentes.
+// Promise.allSettled (não Promise.all) garante que uma simulação falhando
+// (timeout, revert) não derruba as outras.
+export async function fetchUncollectedFees(
+  owner: Address,
+  positions: OnchainPosition[]
+): Promise<Map<string, UncollectedFees>> {
+  const npm = { address: UNISWAP_V3.nonfungiblePositionManager, abi: nonfungiblePositionManagerAbi } as const;
+
+  const settled = await Promise.allSettled(
+    positions.map((p) =>
+      publicClient.simulateContract({
+        ...npm,
+        functionName: "collect",
+        args: [{ tokenId: p.tokenId, recipient: owner, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }],
+        account: owner,
+      })
+    )
+  );
+
+  const fees = new Map<string, UncollectedFees>();
+  settled.forEach((r, i) => {
+    const tokenId = positions[i]!.tokenId.toString();
+    if (r.status === "fulfilled") {
+      const [amount0, amount1] = r.value.result;
+      fees.set(tokenId, { amount0, amount1 });
+    } else {
+      console.error(`[fetchUncollectedFees] falha ao simular collect() da posição #${tokenId}:`, r.reason);
+    }
+  });
+  // posição ausente do Map = simulação falhou; quem chama deve mostrar
+  // "indisponível", nunca assumir 0 disfarçado (0 é um valor real e
+  // diferente de "não sei").
+  return fees;
+}

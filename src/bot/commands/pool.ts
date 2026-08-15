@@ -24,6 +24,7 @@ export async function poolCommand(ctx: CommandContext<Context>) {
     `  ├ base: ${formatPct(pool.apyBase)}`,
     `  └ reward: ${formatPct(pool.apyReward)}`,
     `APY médio (30d): ${formatPct(pool.apyMean30d)}`,
+    `APY base (7d, DefiLlama, assume faixa de concentração 0.3%/0.001%): ${formatPct(pool.apyBase7d)}`,
   ];
 
   const isSpike = pool.apyMean30d !== null && pool.apy > pool.apyMean30d * 1.5;

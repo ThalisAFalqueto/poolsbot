@@ -17,6 +17,7 @@ export type DefiLlamaPool = {
   il7d: number | null; // geralmente null na prática, mas presente pra alguns pools
   sigma: number | null; // desvio-padrão histórico do APY — quanto menor, mais estável/previsível
   apyMean30d: number | null; // média de APY dos últimos 30 dias — usado pra detectar picos transitórios
+  apyBase7d: number | null; // APY base assumindo faixa de concentração padrão (0.3%/0.001%) — não é a faixa real
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
 };
 
