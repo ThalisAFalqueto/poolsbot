@@ -1,8 +1,10 @@
 import { createBot } from "./bot/bot.js";
+import { startScheduler } from "./scheduler/index.js";
 
 async function main() {
   const bot = createBot();
   console.log("Poolsbot iniciando...");
+  startScheduler();
   await bot.start({
     onStart: (info) => console.log(`Bot @${info.username} rodando.`),
   });

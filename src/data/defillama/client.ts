@@ -14,6 +14,7 @@ export type DefiLlamaPool = {
   apyPct30D: number | null;
   stablecoin: boolean;
   ilRisk: string;
+  il7d: number | null; // geralmente null na prática, mas presente pra alguns pools
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
 };
 
