@@ -63,6 +63,44 @@ function buildPositionBlock(
   return [headerLine, `   ${entryLine}`, `   ${currentLine}`, `   ${feesLine}`, `   ${summaryLine}`].join("\n");
 }
 
+type SummaryEntry = {
+  token1Address: string;
+  token1Symbol: string;
+  entryValue: number;
+  currentValue: number;
+  feesValue: number;
+  totalPnl: number;
+};
+
+// Posições podem ter moedas de cotação (token1) diferentes entre si — somar
+// um valor "em USDC" com um "em LINK" não faz sentido sem um oráculo de
+// preço USD, que o projeto deliberadamente não usa (ver domain/calculate-il.ts:
+// token1 como unidade de conta é matematicamente exato POR POSIÇÃO, mas não
+// convertível entre posições sem mais uma fonte de dado). Em vez de um total
+// único, agrupa por token1 e soma dentro de cada grupo — correto sempre, e
+// colapsa num total só quando o usuário só usa uma moeda de cotação.
+function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
+  if (entries.length === 0) return [];
+
+  const groups = new Map<string, { symbol: string; count: number; entry: number; current: number; fees: number; pnl: number }>();
+  for (const e of entries) {
+    const g = groups.get(e.token1Address) ?? { symbol: e.token1Symbol, count: 0, entry: 0, current: 0, fees: 0, pnl: 0 };
+    g.count += 1;
+    g.entry += e.entryValue;
+    g.current += e.currentValue;
+    g.fees += e.feesValue;
+    g.pnl += e.totalPnl;
+    groups.set(e.token1Address, g);
+  }
+
+  const lines = [...groups.values()].map(
+    (g) =>
+      `${g.count} posiç${g.count === 1 ? "ão" : "ões"} em ${g.symbol}: entrada ${formatPrice(g.entry)} · atual ${formatPrice(g.current)} · fees ${formatPrice(g.fees)} · P&L total ${g.pnl >= 0 ? "+" : ""}${formatPrice(g.pnl)} ${g.symbol}`
+  );
+
+  return ["📊 Resumo do portfólio (por moeda de cotação):", ...lines, ""];
+}
+
 function chunkLines(lines: string[], maxChars: number): string[][] {
   const chunks: string[][] = [];
   let current: string[] = [];
@@ -116,11 +154,14 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
     return aOut - bOut;
   });
 
-  const blocks = await Promise.all(
+  const results = await Promise.all(
     sorted.map(async (p) => {
       const record = upsertedByTokenId.get(p.tokenId.toString());
       if (!record) {
-        return `❔ ${p.token0.symbol}/${p.token1.symbol} (#${p.tokenId})\n   Indisponível: falha ao sincronizar posição.`;
+        return {
+          block: `❔ ${p.token0.symbol}/${p.token1.symbol} (#${p.tokenId})\n   Indisponível: falha ao sincronizar posição.`,
+          summaryEntry: null as SummaryEntry | null,
+        };
       }
 
       const baseline = await syncIlBaseline(record.id, {
@@ -156,9 +197,24 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
           })
         : null;
 
-      return buildPositionBlock(p, il, pnl, fees, baseline.wasReset);
+      const summaryEntry: SummaryEntry | null = pnl
+        ? {
+            token1Address: p.token1.address,
+            token1Symbol: p.token1.symbol,
+            entryValue: pnl.entryValueToken1,
+            currentValue: pnl.positionValueToken1,
+            feesValue: pnl.feesValueToken1,
+            totalPnl: pnl.totalPnlToken1,
+          }
+        : null;
+
+      return { block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset), summaryEntry };
     })
   );
+
+  const blocks = results.map((r) => r.block);
+  const summaryEntries = results.flatMap((r) => (r.summaryEntry ? [r.summaryEntry] : []));
+  const summaryLines = buildPortfolioSummary(summaryEntries);
 
   const pages = chunkLines(blocks, MAX_MESSAGE_CHARS);
 
@@ -167,7 +223,8 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
       i === 0
         ? `Suas posições de LP em Arbitrum (${positions.length}):`
         : `Suas posições de LP em Arbitrum — continuação (${i + 1}/${pages.length}):`;
+    const summary = i === 0 ? summaryLines : [];
     const footer = i === pages.length - 1 ? `\n\n${PNL_DISCLAIMER}` : "";
-    await ctx.reply([header, ...pageLines].join("\n") + footer);
+    await ctx.reply([header, ...summary, ...pageLines].join("\n") + footer);
   }
 }
