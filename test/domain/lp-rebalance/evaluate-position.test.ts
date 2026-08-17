@@ -6,6 +6,7 @@ const NOW = new Date("2026-08-15T12:00:00Z");
 
 function makePosition(overrides: Partial<OnchainPosition> = {}): OnchainPosition {
   return {
+    chain: "arbitrum",
     tokenId: 1n,
     poolAddress: "0x0000000000000000000000000000000000000001",
     fee: 3000,

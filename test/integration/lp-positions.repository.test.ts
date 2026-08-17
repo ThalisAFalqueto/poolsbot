@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "../../src/persistence/db.js";
-import { findOrCreateUserByTelegramChatId, setWalletAddress } from "../../src/persistence/repositories/users.repository.js";
+import { findOrCreateUserByTelegramChatId } from "../../src/persistence/repositories/users.repository.js";
+import { addWallet } from "../../src/persistence/repositories/user-wallets.repository.js";
 import {
   deleteStalePositions,
   getIlAlertState,
   getIlBaseline,
   getPositionState,
-  listUsersWithWallet,
+  listUserWallets,
   syncIlBaseline,
   updateIlAlertState,
   updatePositionState,
@@ -42,15 +43,25 @@ describe("lp-positions.repository", () => {
     await truncateAll();
   });
 
-  describe("listUsersWithWallet", () => {
-    it("só retorna usuários com walletAddress preenchido", async () => {
+  describe("listUserWallets", () => {
+    it("só retorna usuários com pelo menos uma wallet vinculada", async () => {
       const withWallet = await findOrCreateUserByTelegramChatId("chat-1");
-      await setWalletAddress(withWallet.id, "0xabc");
+      await addWallet(withWallet.id, "0xabc");
       await findOrCreateUserByTelegramChatId("chat-2"); // sem wallet
 
-      const users = await listUsersWithWallet();
-      expect(users).toHaveLength(1);
-      expect(users[0]?.telegramChatId).toBe("chat-1");
+      const rows = await listUserWallets();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.telegramChatId).toBe("chat-1");
+    });
+
+    it("retorna uma linha por wallet quando o usuário tem mais de uma", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-3");
+      await addWallet(user.id, "0xabc");
+      await addWallet(user.id, "0xdef");
+
+      const rows = await listUserWallets();
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r) => r.userId === user.id)).toBe(true);
     });
   });
 

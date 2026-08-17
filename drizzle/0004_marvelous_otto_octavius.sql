@@ -1,0 +1,1 @@
+ALTER TABLE "lp_positions" ALTER COLUMN "chain" DROP DEFAULT;

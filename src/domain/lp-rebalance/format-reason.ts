@@ -1,3 +1,4 @@
+import { chains } from "../../config/chains.js";
 import type { ImpermanentLossResult } from "./calculate-il.js";
 import { sqrtPriceX96ToPrice, tickToPrice } from "./price-math.js";
 import { suggestRange } from "./range-suggestion.js";
@@ -32,7 +33,8 @@ function formatFee(fee: number): string {
 }
 
 function header(position: OnchainPosition): string {
-  return `${position.token0.symbol}/${position.token1.symbol} ${formatFee(position.fee)} (Uniswap V3, Arbitrum)`;
+  const chainName = chains[position.chain].defillamaChainName;
+  return `${position.token0.symbol}/${position.token1.symbol} ${formatFee(position.fee)} (Uniswap V3, ${chainName})`;
 }
 
 function rangeLine(position: OnchainPosition): string {

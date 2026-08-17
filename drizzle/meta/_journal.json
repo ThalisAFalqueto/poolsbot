@@ -29,6 +29,20 @@
       "when": 1786827091306,
       "tag": "0003_groovy_mattie_franklin",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786978258550,
+      "tag": "0004_marvelous_otto_octavius",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786979686901,
+      "tag": "0005_panoramic_santa_claus",
+      "breakpoints": true
     }
   ]
 }

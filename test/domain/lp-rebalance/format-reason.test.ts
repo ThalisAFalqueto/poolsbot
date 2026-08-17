@@ -29,6 +29,7 @@ describe("formatBoundaryPrice", () => {
 describe("formatOutOfRangeReason", () => {
   it("não produz números absurdos mesmo com uma posição full-range (edge case defensivo)", () => {
     const position: OnchainPosition = {
+      chain: "arbitrum",
       tokenId: 92n,
       poolAddress: "0x0000000000000000000000000000000000000001",
       fee: 3000,
@@ -48,6 +49,7 @@ describe("formatOutOfRangeReason", () => {
 
   it("não produz números absurdos numa posição larga e assimétrica (um lado full-range, outro real)", () => {
     const position: OnchainPosition = {
+      chain: "arbitrum",
       tokenId: 999n,
       poolAddress: "0x0000000000000000000000000000000000000001",
       fee: 3000,

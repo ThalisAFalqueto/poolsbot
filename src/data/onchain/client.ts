@@ -1,18 +1,31 @@
-import { createPublicClient, http, type Address } from "viem";
-import { chains, UNISWAP_V3 } from "../../config/chains.js";
-import { env } from "../../config/env.js";
+import { createPublicClient, http, type Address, type PublicClient } from "viem";
+import { chains, type ChainKey } from "../../config/chains.js";
 import { erc20Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, uniswapV3PoolAbi } from "./abis.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 
-export const publicClient = createPublicClient({
-  chain: chains.arbitrum.viemChain,
-  transport: http(env.arbitrumRpcUrl),
-});
+// Um client por chain, criado sob demanda e reaproveitado — evita recriar a
+// conexão HTTP a cada chamada.
+const clientCache = new Map<ChainKey, PublicClient>();
+
+export function getPublicClient(chainKey: ChainKey): PublicClient {
+  let client = clientCache.get(chainKey);
+  if (!client) {
+    const def = chains[chainKey];
+    if (!def.rpcUrl) throw new Error(`Chain "${chainKey}" sem RPC configurado`);
+    client = createPublicClient({ chain: def.viemChain, transport: http(def.rpcUrl) });
+    clientCache.set(chainKey, client);
+  }
+  return client;
+}
 
 // client.multicall usa o contrato multicall3, já pré-configurado em
-// viem/chains para arbitrum — nenhuma config extra necessária.
-export async function fetchPositionsForWallet(owner: Address): Promise<OnchainPosition[]> {
-  const npm = { address: UNISWAP_V3.nonfungiblePositionManager, abi: nonfungiblePositionManagerAbi } as const;
+// viem/chains pras chains suportadas — nenhuma config extra necessária.
+export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address): Promise<OnchainPosition[]> {
+  const publicClient = getPublicClient(chainKey);
+  const npm = {
+    address: chains[chainKey].uniswapV3.nonfungiblePositionManager,
+    abi: nonfungiblePositionManagerAbi,
+  } as const;
 
   const balance = await publicClient.readContract({ ...npm, functionName: "balanceOf", args: [owner] });
   if (balance === 0n) return [];
@@ -57,7 +70,7 @@ export async function fetchPositionsForWallet(owner: Address): Promise<OnchainPo
   const poolKeys = [...new Map(active.map((p) => [`${p.token0}-${p.token1}-${p.fee}`, p])).values()];
   const tokenAddrs = [...new Set(active.flatMap((p) => [p.token0, p.token1]))] as Address[];
 
-  const factory = { address: UNISWAP_V3.factory, abi: uniswapV3FactoryAbi } as const;
+  const factory = { address: chains[chainKey].uniswapV3.factory, abi: uniswapV3FactoryAbi } as const;
   const [poolResults, tokenResults] = await Promise.all([
     publicClient.multicall({
       contracts: poolKeys.map(
@@ -119,6 +132,8 @@ export async function fetchPositionsForWallet(owner: Address): Promise<OnchainPo
       if (!t0 || !t1) return null;
 
       return {
+        chain: chainKey,
+        walletAddress: owner,
         tokenId: p.tokenId,
         poolAddress,
         fee: p.fee,
@@ -147,10 +162,15 @@ export type UncollectedFees = { amount0: bigint; amount1: bigint };
 // Promise.allSettled (não Promise.all) garante que uma simulação falhando
 // (timeout, revert) não derruba as outras.
 export async function fetchUncollectedFees(
+  chainKey: ChainKey,
   owner: Address,
   positions: OnchainPosition[]
 ): Promise<Map<string, UncollectedFees>> {
-  const npm = { address: UNISWAP_V3.nonfungiblePositionManager, abi: nonfungiblePositionManagerAbi } as const;
+  const publicClient = getPublicClient(chainKey);
+  const npm = {
+    address: chains[chainKey].uniswapV3.nonfungiblePositionManager,
+    abi: nonfungiblePositionManagerAbi,
+  } as const;
 
   const settled = await Promise.allSettled(
     positions.map((p) =>
@@ -177,4 +197,43 @@ export async function fetchUncollectedFees(
   // "indisponível", nunca assumir 0 disfarçado (0 é um valor real e
   // diferente de "não sei").
   return fees;
+}
+
+export type PositionsByChain = { chain: ChainKey; positions: OnchainPosition[] };
+
+// Busca as posições de uma wallet em todas as chains ativas em paralelo,
+// isolando falha por chain (uma RPC fora do ar não derruba as outras) —
+// mesmo padrão de Promise.allSettled já usado em fetchUncollectedFees acima.
+export async function fetchPositionsAcrossChains(
+  owner: Address,
+  activeChains: ChainKey[]
+): Promise<PositionsByChain[]> {
+  const settled = await Promise.allSettled(
+    activeChains.map(async (chain) => ({ chain, positions: await fetchPositionsForWallet(chain, owner) }))
+  );
+  return settled.flatMap((r, i) => {
+    if (r.status === "fulfilled") return [r.value];
+    console.error(`[fetchPositionsAcrossChains] falha na chain ${activeChains[i]}:`, r.reason);
+    return [];
+  });
+}
+
+// Busca posições de VÁRIAS wallets do mesmo usuário, em todas as chains
+// ativas, e junta o resultado por chain — cada OnchainPosition já carrega
+// sua própria walletAddress, então o merge é seguro mesmo com wallets
+// diferentes tendo posições na mesma chain. Reaproveitado pelo job de 15min
+// e por /positions, pra não duplicar esse fan-out em dois lugares.
+export async function fetchPositionsForWallets(
+  owners: Address[],
+  activeChains: ChainKey[]
+): Promise<PositionsByChain[]> {
+  const perWallet = await Promise.all(owners.map((owner) => fetchPositionsAcrossChains(owner, activeChains)));
+
+  const positionsByChain = new Map<ChainKey, OnchainPosition[]>();
+  for (const walletResult of perWallet) {
+    for (const { chain, positions } of walletResult) {
+      positionsByChain.set(chain, [...(positionsByChain.get(chain) ?? []), ...positions]);
+    }
+  }
+  return [...positionsByChain.entries()].map(([chain, positions]) => ({ chain, positions }));
 }

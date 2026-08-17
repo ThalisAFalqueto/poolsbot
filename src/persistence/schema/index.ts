@@ -16,11 +16,30 @@ export const users = pgTable(
   {
     id: serial("id").primaryKey(),
     telegramChatId: text("telegram_chat_id").notNull(),
-    walletAddress: text("wallet_address"), // endereço público (nunca chave privada)
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => ({
     telegramChatIdIdx: uniqueIndex("users_telegram_chat_id_idx").on(table.telegramChatId),
+  })
+);
+
+// Um usuário pode vincular mais de uma wallet (endereço público, nunca
+// chave privada) — ex: uma wallet separada só pra LP. lp_positions não
+// referencia esta tabela diretamente: cada posição já é identificada por
+// (tokenId, chain) e associada ao userId, não a uma wallet específica.
+export const userWallets = pgTable(
+  "user_wallets",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    address: text("address").notNull(),
+    label: text("label"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    userIdAddressIdx: uniqueIndex("user_wallets_user_id_address_idx").on(table.userId, table.address),
   })
 );
 
@@ -129,7 +148,7 @@ export const lpPositions = pgTable(
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    chain: text("chain").notNull().default("arbitrum"),
+    chain: text("chain").notNull(),
     tokenId: text("token_id").notNull(), // uint256 on-chain; texto evita overflow, mesmo padrão de poolId
     poolAddress: text("pool_address").notNull(),
     token0Address: text("token0_address").notNull(),

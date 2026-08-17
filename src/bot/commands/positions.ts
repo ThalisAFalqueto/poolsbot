@@ -1,19 +1,27 @@
 import type { CommandContext, Context } from "grammy";
 import type { Address } from "viem";
-import { fetchPositionsForWallet, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
+import { chains, getActiveChains } from "../../config/chains.js";
+import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
 import { formatBoundaryPrice, formatPrice } from "../../domain/lp-rebalance/format-reason.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
+import { listWallets } from "../../persistence/repositories/user-wallets.repository.js";
 import {
   syncIlBaseline,
   toPositionUpsertInput,
   upsertPositions,
 } from "../../persistence/repositories/lp-positions.repository.js";
 
-const CHAIN = "arbitrum";
+// tokenId é um contador por contrato NPM, não globalmente único entre
+// chains — a posição #12345 na Arbitrum e a #12345 na Base são coisas
+// diferentes. Toda Map indexada por posição usa essa chave composta.
+function positionKey(chain: string, tokenId: bigint | string): string {
+  return `${chain}:${tokenId}`;
+}
+
 const PNL_DISCLAIMER =
   "* Valores calculados desde que o poolsbot passou a monitorar cada posição (não é a abertura on-chain real). Fees são as coletáveis agora, via simulação de collect() sem gastar gas — entram no P&L total, mas não no IL isolado.";
 
@@ -31,19 +39,28 @@ function formatAmount(value: number): string {
 
 type FeesAmounts = { amount0: number; amount1: number };
 
+// endereço encurtado (0x1234…abcd) como fallback quando a wallet não tem
+// rótulo — só é chamado quando o usuário tem 2+ wallets vinculadas.
+function shortAddress(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
 function buildPositionBlock(
   p: OnchainPosition,
   il: ImpermanentLossResult,
   pnl: PnlResult | null,
   fees: FeesAmounts | null,
-  wasReset: boolean
+  wasReset: boolean,
+  walletLabel: string | null
 ): string {
   const inRange = isInRange(p.currentTick, p.tickLower, p.tickUpper);
   const low = formatBoundaryPrice(p.tickLower, p.token0.decimals, p.token1.decimals);
   const high = formatBoundaryPrice(p.tickUpper, p.token0.decimals, p.token1.decimals);
   const current = formatPrice(sqrtPriceX96ToPrice(p.sqrtPriceX96, p.token0.decimals, p.token1.decimals));
   const status = inRange ? "✅" : "🚨";
-  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} ${(p.fee / 10000).toFixed(2)}% — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol} (#${p.tokenId})`;
+  const chainName = chains[p.chain].defillamaChainName;
+  const walletTag = walletLabel ? `, ${walletLabel}` : "";
+  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} ${(p.fee / 10000).toFixed(2)}% (${chainName}${walletTag}) — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol} (#${p.tokenId})`;
 
   const since = il.since.toLocaleDateString("pt-BR");
   const resetNote = wasReset ? " (resetado)" : "";
@@ -78,7 +95,10 @@ type SummaryEntry = {
 // token1 como unidade de conta é matematicamente exato POR POSIÇÃO, mas não
 // convertível entre posições sem mais uma fonte de dado). Em vez de um total
 // único, agrupa por token1 e soma dentro de cada grupo — correto sempre, e
-// colapsa num total só quando o usuário só usa uma moeda de cotação.
+// colapsa num total só quando o usuário só usa uma moeda de cotação. Isso
+// também separa corretamente entre chains sem precisar de chave composta
+// aqui: o mesmo símbolo (ex. USDC) tem um ENDEREÇO diferente em cada chain,
+// então agrupar por endereço já isola por chain automaticamente.
 function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
   if (entries.length === 0) return [];
 
@@ -122,14 +142,23 @@ function chunkLines(lines: string[], maxChars: number): string[][] {
 
 export async function positionsCommand(ctx: CommandContext<Context>) {
   const user = await findOrCreateUserByTelegramChatId(String(ctx.chat.id));
-  if (!user.walletAddress) {
+  const wallets = await listWallets(user.id);
+  if (wallets.length === 0) {
     await ctx.reply("Nenhuma wallet vinculada ainda. Use /addwallet <endereço> primeiro.");
     return;
   }
+  const walletLabelByAddress = new Map(wallets.map((w) => [w.address, w.label]));
+  const showWalletTag = wallets.length > 1;
 
-  const positions = await fetchPositionsForWallet(user.walletAddress as Address);
+  const activeChains = getActiveChains();
+  const perChain = await fetchPositionsForWallets(
+    wallets.map((w) => w.address as Address),
+    activeChains
+  );
+  const positions = perChain.flatMap((c) => c.positions);
   if (positions.length === 0) {
-    await ctx.reply("Nenhuma posição de liquidez ativa encontrada nessa wallet em Arbitrum (Uniswap V3).");
+    const chainNames = activeChains.map((c) => chains[c].defillamaChainName).join(", ");
+    await ctx.reply(`Nenhuma posição de liquidez ativa encontrada nessas wallets (Uniswap V3) em ${chainNames}.`);
     return;
   }
 
@@ -139,24 +168,45 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   // não passou pelo ciclo de 15min do scheduler. Não chama
   // deleteStalePositions aqui: reconciliação completa fica só no job, pra
   // evitar duas fontes de escrita concorrentes na mesma linha.
-  const [upserted, feesByTokenId] = await Promise.all([
-    upsertPositions(positions.map((p) => toPositionUpsertInput(user.id, CHAIN, p))),
-    fetchUncollectedFees(user.walletAddress as Address, positions),
+  //
+  // fetchUncollectedFees roda por (chain, wallet): collect() exige que
+  // msg.sender seja o DONO da posição, então não dá pra simular pra todas
+  // as posições de uma chain de uma vez só se elas vierem de wallets
+  // diferentes — precisa agrupar por wallet dentro de cada chain primeiro.
+  const [upserted, feesEntries] = await Promise.all([
+    upsertPositions(positions.map((p) => toPositionUpsertInput(user.id, p.chain, p))),
+    Promise.all(
+      perChain.flatMap(({ chain, positions: chainPositions }) => {
+        const byWallet = new Map<Address, OnchainPosition[]>();
+        for (const p of chainPositions) {
+          byWallet.set(p.walletAddress, [...(byWallet.get(p.walletAddress) ?? []), p]);
+        }
+        return [...byWallet.entries()].map(async ([walletAddress, walletPositions]) => {
+          const fees = await fetchUncollectedFees(chain, walletAddress, walletPositions);
+          return [...fees.entries()].map(([tokenId, amounts]) => [positionKey(chain, tokenId), amounts] as const);
+        });
+      })
+    ),
   ]);
-  const upsertedByTokenId = new Map(upserted.map((u) => [u.tokenId, u]));
+  const upsertedByTokenId = new Map(upserted.map((u) => [positionKey(u.chain, u.tokenId), u]));
+  const feesByTokenId = new Map(feesEntries.flat());
 
   // Fora de range primeiro — é o que precisa de atenção. Com paginação isso
   // já bastaria, mas também garante que a 1ª mensagem sempre traz o que
-  // importa mesmo que o usuário não role até a última página.
+  // importa mesmo que o usuário não role até a última página. Em caso de
+  // empate, agrupa por wallet (ordem em que foi vinculada) — só cosmético,
+  // deixa a lista mais fácil de ler quando há mais de uma.
+  const walletOrder = new Map(wallets.map((w, i) => [w.address, i]));
   const sorted = [...positions].sort((a, b) => {
     const aOut = isInRange(a.currentTick, a.tickLower, a.tickUpper) ? 1 : 0;
     const bOut = isInRange(b.currentTick, b.tickLower, b.tickUpper) ? 1 : 0;
-    return aOut - bOut;
+    if (aOut !== bOut) return aOut - bOut;
+    return (walletOrder.get(a.walletAddress) ?? 0) - (walletOrder.get(b.walletAddress) ?? 0);
   });
 
   const results = await Promise.all(
     sorted.map(async (p) => {
-      const record = upsertedByTokenId.get(p.tokenId.toString());
+      const record = upsertedByTokenId.get(positionKey(p.chain, p.tokenId));
       if (!record) {
         return {
           block: `❔ ${p.token0.symbol}/${p.token1.symbol} (#${p.tokenId})\n   Indisponível: falha ao sincronizar posição.`,
@@ -180,7 +230,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         currentSqrtPriceX96: p.sqrtPriceX96,
       });
 
-      const rawFees: UncollectedFees | undefined = feesByTokenId.get(p.tokenId.toString());
+      const rawFees: UncollectedFees | undefined = feesByTokenId.get(positionKey(p.chain, p.tokenId));
       const fees: FeesAmounts | null = rawFees
         ? {
             amount0: Number(rawFees.amount0) / 10 ** p.token0.decimals,
@@ -208,11 +258,21 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
           }
         : null;
 
-      return { block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset), summaryEntry };
+      const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
+      return {
+        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel),
+        walletAddress: p.walletAddress,
+        summaryEntry,
+      };
     })
   );
 
-  const blocks = results.map((r) => r.block);
+  // Linha em branco entre blocos de wallets diferentes — só quando há mais
+  // de uma vinculada (senão nunca muda, nunca insere nada).
+  const blocks = results.flatMap((r, i) => {
+    const separator = showWalletTag && i > 0 && results[i - 1]!.walletAddress !== r.walletAddress ? [""] : [];
+    return [...separator, r.block];
+  });
   const summaryEntries = results.flatMap((r) => (r.summaryEntry ? [r.summaryEntry] : []));
   const summaryLines = buildPortfolioSummary(summaryEntries);
 
@@ -221,8 +281,8 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   for (const [i, pageLines] of pages.entries()) {
     const header =
       i === 0
-        ? `Suas posições de LP em Arbitrum (${positions.length}):`
-        : `Suas posições de LP em Arbitrum — continuação (${i + 1}/${pages.length}):`;
+        ? `Suas posições de LP (${positions.length}):`
+        : `Suas posições de LP — continuação (${i + 1}/${pages.length}):`;
     const summary = i === 0 ? summaryLines : [];
     const footer = i === pages.length - 1 ? `\n\n${PNL_DISCLAIMER}` : "";
     await ctx.reply([header, ...summary, ...pageLines].join("\n") + footer);

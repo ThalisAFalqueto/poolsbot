@@ -1,8 +1,11 @@
 import type { Address } from "viem";
+import type { ChainKey } from "../../config/chains.js";
 
 export type TokenMeta = { address: Address; decimals: number; symbol: string };
 
 export type OnchainPosition = {
+  chain: ChainKey;
+  walletAddress: Address;
   tokenId: bigint;
   poolAddress: Address;
   fee: number;

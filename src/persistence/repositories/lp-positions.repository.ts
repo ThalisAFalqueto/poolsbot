@@ -1,18 +1,20 @@
-import { and, eq, isNotNull, notInArray } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
-import { lpPositionIlAlertState, lpPositionIlBaseline, lpPositions, lpPositionState, users } from "../schema/index.js";
+import { lpPositionIlAlertState, lpPositionIlBaseline, lpPositions, lpPositionState, userWallets, users } from "../schema/index.js";
 import { decideBaseline } from "../../domain/lp-rebalance/il-baseline.js";
 import type { IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
 import type { OnchainPosition, PositionState } from "../../domain/lp-rebalance/types.js";
 
-export type UserWithWallet = { userId: number; telegramChatId: string; walletAddress: string };
+// Uma linha por par (usuário, wallet) — um usuário com N wallets vinculadas
+// aparece N vezes. Quem chama agrupa por userId quando precisa processar
+// todas as wallets de um usuário de uma vez (ver check-positions.job.ts).
+export type UserWalletRow = { userId: number; telegramChatId: string; address: string };
 
-export async function listUsersWithWallet(): Promise<UserWithWallet[]> {
-  const rows = await db
-    .select({ userId: users.id, telegramChatId: users.telegramChatId, walletAddress: users.walletAddress })
-    .from(users)
-    .where(isNotNull(users.walletAddress));
-  return rows.filter((r): r is UserWithWallet => r.walletAddress !== null);
+export async function listUserWallets(): Promise<UserWalletRow[]> {
+  return db
+    .select({ userId: users.id, telegramChatId: users.telegramChatId, address: userWallets.address })
+    .from(userWallets)
+    .innerJoin(users, eq(userWallets.userId, users.id));
 }
 
 export type PositionUpsertInput = {
@@ -31,7 +33,7 @@ export type PositionUpsertInput = {
   tickUpper: number;
 };
 
-export type UpsertedPosition = { id: number; tokenId: string; isNew: boolean };
+export type UpsertedPosition = { id: number; chain: string; tokenId: string; isNew: boolean };
 
 // Cada posição é resolvida individualmente (select -> branch insert/update)
 // em vez de um único onConflictDoUpdate, pra poder criar a linha de estado
@@ -53,14 +55,14 @@ export async function upsertPositions(inputs: PositionUpsertInput[]): Promise<Up
         .update(lpPositions)
         .set({ ...input, updatedAt: new Date() })
         .where(eq(lpPositions.id, existing.id));
-      results.push({ id: existing.id, tokenId: input.tokenId, isNew: false });
+      results.push({ id: existing.id, chain: input.chain, tokenId: input.tokenId, isNew: false });
       continue;
     }
 
     const [inserted] = await db.insert(lpPositions).values(input).returning({ id: lpPositions.id });
     if (inserted) {
       await db.insert(lpPositionState).values({ lpPositionId: inserted.id, status: "in_range" });
-      results.push({ id: inserted.id, tokenId: input.tokenId, isNew: true });
+      results.push({ id: inserted.id, chain: input.chain, tokenId: input.tokenId, isNew: true });
     }
   }
 

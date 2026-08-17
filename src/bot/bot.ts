@@ -9,6 +9,8 @@ import { alertsCommand } from "./commands/alerts.js";
 import { unalertCommand } from "./commands/unalert.js";
 import { yieldCommand } from "./commands/yield.js";
 import { addWalletCommand } from "./commands/addwallet.js";
+import { walletsCommand } from "./commands/wallets.js";
+import { removeWalletCommand } from "./commands/removewallet.js";
 import { positionsCommand } from "./commands/positions.js";
 
 export function createBot(): Bot {
@@ -23,6 +25,8 @@ export function createBot(): Bot {
   bot.command("unalert", unalertCommand);
   bot.command("yield", yieldCommand);
   bot.command("addwallet", addWalletCommand);
+  bot.command("wallets", walletsCommand);
+  bot.command("removewallet", removeWalletCommand);
   bot.command("positions", positionsCommand);
 
   bot.catch((err) => {
