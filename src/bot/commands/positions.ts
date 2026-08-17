@@ -2,6 +2,7 @@ import type { CommandContext, Context } from "grammy";
 import type { Address } from "viem";
 import { chains, getActiveChains } from "../../config/chains.js";
 import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
+import { calculateRealizedApr, type AprResult } from "../../domain/lp-rebalance/calculate-apr.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
 import { formatBoundaryPrice, formatPrice } from "../../domain/lp-rebalance/format-reason.js";
@@ -21,6 +22,11 @@ import {
 function positionKey(chain: string, tokenId: bigint | string): string {
   return `${chain}:${tokenId}`;
 }
+
+// Meta declarada do usuário pro projeto (≥3%/mês) — hoje o bot é de uso
+// pessoal, então fica hardcoded; se algum dia virar multi-usuário, isso
+// precisaria virar uma preferência por usuário.
+const TARGET_MONTHLY_PCT = 0.03;
 
 const PNL_DISCLAIMER =
   "* Valores calculados desde que o poolsbot passou a monitorar cada posição (não é a abertura on-chain real). Fees são as coletáveis agora, via simulação de collect() sem gastar gas — entram no P&L total, mas não no IL isolado.";
@@ -45,13 +51,28 @@ function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
+function formatAprLine(apr: AprResult | null): string {
+  if (!apr) return "APR realizado: indisponível (fees desconhecidas)";
+  if (apr.unreliableReason === "too_new") {
+    const hours = Math.max(0, Math.round(apr.elapsedDays * 24));
+    return `APR realizado: cedo demais pra estimar (observando há ${hours}h)`;
+  }
+  if (apr.unreliableReason === "implausible") {
+    return "APR realizado: não confiável (posição com valor de entrada residual)";
+  }
+  const monthlyPct = (apr.monthlyEquivalentPct * 100).toFixed(1);
+  const annualPct = (apr.annualizedPct * 100).toFixed(1);
+  return `APR realizado: ${apr.monthlyEquivalentPct >= 0 ? "+" : ""}${monthlyPct}%/mês (${apr.annualizedPct >= 0 ? "+" : ""}${annualPct}%/ano)`;
+}
+
 function buildPositionBlock(
   p: OnchainPosition,
   il: ImpermanentLossResult,
   pnl: PnlResult | null,
   fees: FeesAmounts | null,
   wasReset: boolean,
-  walletLabel: string | null
+  walletLabel: string | null,
+  apr: AprResult | null
 ): string {
   const inRange = isInRange(p.currentTick, p.tickLower, p.tickUpper);
   const low = formatBoundaryPrice(p.tickLower, p.token0.decimals, p.token1.decimals);
@@ -77,7 +98,9 @@ function buildPositionBlock(
     ? `Movimento de preço: ${pnl.priceMovementToken1 >= 0 ? "+" : ""}${formatPrice(pnl.priceMovementToken1)} ${p.token1.symbol} · IL: ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
     : `IL: ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
 
-  return [headerLine, `   ${entryLine}`, `   ${currentLine}`, `   ${feesLine}`, `   ${summaryLine}`].join("\n");
+  const aprLine = formatAprLine(apr);
+
+  return [headerLine, `   ${entryLine}`, `   ${currentLine}`, `   ${feesLine}`, `   ${summaryLine}`, `   ${aprLine}`].join("\n");
 }
 
 type SummaryEntry = {
@@ -87,6 +110,12 @@ type SummaryEntry = {
   currentValue: number;
   feesValue: number;
   totalPnl: number;
+  // totalPnl escalado pra uma janela de 30 dias (totalPnl * 30/elapsedDays),
+  // já pronto pra somar direto num grupo e dividir pela soma de entryValue —
+  // dá a média ponderada por capital do retorno mensal. null quando a
+  // posição é nova demais pra ter uma estimativa confiável (ver
+  // calculate-apr.ts) — fica de fora da média, mas é contada à parte.
+  monthlyEquivalentPnl: number | null;
 };
 
 // Posições podem ter moedas de cotação (token1) diferentes entre si — somar
@@ -102,21 +131,54 @@ type SummaryEntry = {
 function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
   if (entries.length === 0) return [];
 
-  const groups = new Map<string, { symbol: string; count: number; entry: number; current: number; fees: number; pnl: number }>();
+  const groups = new Map<
+    string,
+    { symbol: string; count: number; entry: number; current: number; fees: number; pnl: number; monthlyPnl: number; monthlyEntry: number; tooNew: number }
+  >();
   for (const e of entries) {
-    const g = groups.get(e.token1Address) ?? { symbol: e.token1Symbol, count: 0, entry: 0, current: 0, fees: 0, pnl: 0 };
+    const g = groups.get(e.token1Address) ?? {
+      symbol: e.token1Symbol,
+      count: 0,
+      entry: 0,
+      current: 0,
+      fees: 0,
+      pnl: 0,
+      monthlyPnl: 0,
+      monthlyEntry: 0,
+      tooNew: 0,
+    };
     g.count += 1;
     g.entry += e.entryValue;
     g.current += e.currentValue;
     g.fees += e.feesValue;
     g.pnl += e.totalPnl;
+    if (e.monthlyEquivalentPnl !== null) {
+      g.monthlyPnl += e.monthlyEquivalentPnl;
+      g.monthlyEntry += e.entryValue;
+    } else {
+      g.tooNew += 1;
+    }
     groups.set(e.token1Address, g);
   }
 
-  const lines = [...groups.values()].map(
-    (g) =>
-      `${g.count} posiç${g.count === 1 ? "ão" : "ões"} em ${g.symbol}: entrada ${formatPrice(g.entry)} · atual ${formatPrice(g.current)} · fees ${formatPrice(g.fees)} · P&L total ${g.pnl >= 0 ? "+" : ""}${formatPrice(g.pnl)} ${g.symbol}`
-  );
+  const lines = [...groups.values()].flatMap((g) => {
+    const summaryLine = `${g.count} posiç${g.count === 1 ? "ão" : "ões"} em ${g.symbol}: entrada ${formatPrice(g.entry)} · atual ${formatPrice(g.current)} · fees ${formatPrice(g.fees)} · P&L total ${g.pnl >= 0 ? "+" : ""}${formatPrice(g.pnl)} ${g.symbol}`;
+
+    if (g.monthlyEntry <= 0) {
+      const tooNewNote = g.tooNew > 0 ? ` (${g.tooNew} muito nova${g.tooNew === 1 ? "" : "s"} pra estimar)` : "";
+      return [summaryLine, `   Retorno médio ponderado: indisponível${tooNewNote}`];
+    }
+
+    const weightedMonthlyPct = g.monthlyPnl / g.monthlyEntry;
+    const hitTarget = weightedMonthlyPct >= TARGET_MONTHLY_PCT;
+    const gapPct = Math.abs((weightedMonthlyPct / TARGET_MONTHLY_PCT - 1) * 100).toFixed(0);
+    const status = hitTarget ? `✅ ${gapPct}% acima da meta` : `⚠️ ${gapPct}% abaixo da meta`;
+    const tooNewNote = g.tooNew > 0 ? ` (+${g.tooNew} muito nova${g.tooNew === 1 ? "" : "s"} pra entrar na média)` : "";
+    return [
+      summaryLine,
+      `   Retorno médio ponderado: ${(weightedMonthlyPct * 100).toFixed(1)}%/mês (meta: ${(TARGET_MONTHLY_PCT * 100).toFixed(0)}%/mês) ${status}${tooNewNote}`,
+    ];
+  });
 
   return ["📊 Resumo do portfólio (por moeda de cotação):", ...lines, ""];
 }
@@ -196,6 +258,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   // importa mesmo que o usuário não role até a última página. Em caso de
   // empate, agrupa por wallet (ordem em que foi vinculada) — só cosmético,
   // deixa a lista mais fácil de ler quando há mais de uma.
+  const now = new Date();
   const walletOrder = new Map(wallets.map((w, i) => [w.address, i]));
   const sorted = [...positions].sort((a, b) => {
     const aOut = isInRange(a.currentTick, a.tickLower, a.tickUpper) ? 1 : 0;
@@ -247,6 +310,10 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
           })
         : null;
 
+      const apr = pnl
+        ? calculateRealizedApr({ entryValueToken1: pnl.entryValueToken1, totalPnlToken1: pnl.totalPnlToken1, since: il.since, now })
+        : null;
+
       const summaryEntry: SummaryEntry | null = pnl
         ? {
             token1Address: p.token1.address,
@@ -255,12 +322,13 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
             currentValue: pnl.positionValueToken1,
             feesValue: pnl.feesValueToken1,
             totalPnl: pnl.totalPnlToken1,
+            monthlyEquivalentPnl: apr?.reliable ? pnl.totalPnlToken1 * (30 / apr.elapsedDays) : null,
           }
         : null;
 
       const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
       return {
-        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel),
+        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr),
         walletAddress: p.walletAddress,
         summaryEntry,
       };
