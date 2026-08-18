@@ -4,3 +4,10 @@ dist/
 *.log
 .DS_Store
 .claude/
+
+# contracts/ (Foundry) — deps e artefatos de build, regenerados via
+# `forge install` / `forge build`, mesmo espírito de node_modules/dist acima
+contracts/lib/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
