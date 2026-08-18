@@ -66,9 +66,9 @@ async function estimateGasCostIfOutOfRange(
   return estimateRebalanceCost(gasPriceWei, position, chains[position.chain].wethAddress, currentPrice);
 }
 
-export async function checkPositionsJob(): Promise<void> {
+export async function checkPositionsJob(): Promise<string> {
   const rows = await listUserWallets();
-  if (rows.length === 0) return;
+  if (rows.length === 0) return "nenhuma wallet vinculada.";
 
   const users = groupByUser(rows);
   const activeChains = getActiveChains();
@@ -210,7 +210,7 @@ export async function checkPositionsJob(): Promise<void> {
     }
   }
 
-  console.log(
-    `[check-positions] ${users.length} usuário(s) verificado(s) (${rows.length} wallet(s)), ${notifiedCount} notificações enviadas.`
-  );
+  const summary = `${users.length} usuário(s) verificado(s) (${rows.length} wallet(s)), ${notifiedCount} notificações enviadas.`;
+  console.log(`[check-positions] ${summary}`);
+  return summary;
 }

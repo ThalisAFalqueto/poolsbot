@@ -8,10 +8,10 @@ import { listActiveRulesWithContext } from "../../persistence/repositories/alert
 import { updateAlertState } from "../../persistence/repositories/alert-state.repository.js";
 import { getHistorySince } from "../../persistence/repositories/apy-history.repository.js";
 
-export async function evaluateAlertsJob(): Promise<void> {
+export async function evaluateAlertsJob(): Promise<string> {
   const now = new Date();
   const rules = await listActiveRulesWithContext();
-  if (rules.length === 0) return;
+  if (rules.length === 0) return "nenhuma regra ativa.";
 
   const windowHoursValues = rules.map((r) => r.windowHours).filter((w): w is number => w !== null);
   const maxWindowHours = windowHoursValues.length > 0 ? Math.max(...windowHoursValues) : 1;
@@ -68,5 +68,7 @@ export async function evaluateAlertsJob(): Promise<void> {
     }
   }
 
-  console.log(`[evaluate-alerts] ${rules.length} regras avaliadas, ${notifiedCount} notificações enviadas.`);
+  const summary = `${rules.length} regras avaliadas, ${notifiedCount} notificações enviadas.`;
+  console.log(`[evaluate-alerts] ${summary}`);
+  return summary;
 }

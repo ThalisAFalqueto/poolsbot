@@ -12,6 +12,7 @@ import { addWalletCommand } from "./commands/addwallet.js";
 import { walletsCommand } from "./commands/wallets.js";
 import { removeWalletCommand } from "./commands/removewallet.js";
 import { positionsCommand } from "./commands/positions.js";
+import { statusCommand } from "./commands/status.js";
 
 export function createBot(): Bot {
   const bot = new Bot(env.telegramBotToken);
@@ -28,6 +29,7 @@ export function createBot(): Bot {
   bot.command("wallets", walletsCommand);
   bot.command("removewallet", removeWalletCommand);
   bot.command("positions", positionsCommand);
+  bot.command("status", statusCommand);
 
   bot.catch((err) => {
     console.error("Erro não tratado no bot:", err.error);

@@ -2,16 +2,16 @@ import { fetchAllPools } from "../../data/defillama/client.js";
 import { listDistinctWatchedPools } from "../../persistence/repositories/watched-pools.repository.js";
 import { insertSnapshots, type ApyHistoryRow } from "../../persistence/repositories/apy-history.repository.js";
 
-export async function ingestPoolsJob(): Promise<void> {
+export async function ingestPoolsJob(): Promise<string> {
   const watched = await listDistinctWatchedPools();
-  if (watched.length === 0) return;
+  if (watched.length === 0) return "nenhum pool observado.";
 
   let pools;
   try {
     pools = await fetchAllPools();
   } catch (err) {
     console.error("[ingest-pools] falha ao buscar dados da DefiLlama, pulando ciclo:", err);
-    return;
+    return "falha ao buscar dados da DefiLlama, ciclo pulado.";
   }
 
   const byId = new Map(pools.map((p) => [p.pool, p]));
@@ -36,5 +36,7 @@ export async function ingestPoolsJob(): Promise<void> {
   }
 
   await insertSnapshots(rows);
-  console.log(`[ingest-pools] ${rows.length}/${watched.length} pools atualizados.`);
+  const summary = `${rows.length}/${watched.length} pools atualizados.`;
+  console.log(`[ingest-pools] ${summary}`);
+  return summary;
 }

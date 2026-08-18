@@ -231,3 +231,16 @@ export const lpPositionIlAlertState = pgTable(
     lpPositionIdx: uniqueIndex("lp_position_il_alert_state_lp_position_id_idx").on(table.lpPositionId),
   })
 );
+
+// Snapshot do último run de cada job do scheduler (não um log completo,
+// só o estado atual) — usado pelo /status pra observabilidade operacional
+// sem precisar olhar os logs do pm2. jobName é texto livre (só 3 valores
+// hoje: ingest-pools, evaluate-alerts, check-positions), 1 linha por job,
+// sobrescrita a cada ciclo de 15min via onConflictDoUpdate.
+export const jobStatus = pgTable("job_status", {
+  jobName: text("job_name").primaryKey(),
+  lastRunAt: timestamp("last_run_at").notNull(),
+  lastSuccess: boolean("last_success").notNull(),
+  lastSummary: text("last_summary"), // null se falhou antes de gerar um resumo
+  lastErrorMessage: text("last_error_message"), // null quando lastSuccess = true
+});

@@ -22,6 +22,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/wallets — lista suas wallets vinculadas",
       "/removewallet <endereço> — desvincula uma wallet",
       `/positions — mostra suas posições de LP em todas as wallets vinculadas (${activeChainNames}), se estão dentro da faixa, e o IL de cada uma`,
+      "/status — saúde do bot: última execução de cada job automático e um resumo da sua conta",
     ].join("\n")
   );
 }

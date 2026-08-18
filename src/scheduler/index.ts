@@ -1,16 +1,28 @@
 import cron from "node-cron";
+import { recordJobRun } from "../persistence/repositories/job-status.repository.js";
 import { ingestPoolsJob } from "./jobs/ingest-pools.job.js";
 import { evaluateAlertsJob } from "./jobs/evaluate-alerts.job.js";
 import { checkPositionsJob } from "./jobs/check-positions.job.js";
 
-async function runCycle(): Promise<void> {
+// Cada job roda isolado no seu próprio try/catch — um job falhando não pode
+// impedir os outros de rodarem no mesmo ciclo (antes de existir /status, os
+// 3 rodavam sob um try/catch compartilhado: se evaluate-alerts lançasse,
+// check-positions nunca rodava naquele ciclo). Resultado (sucesso/erro +
+// resumo) é sempre gravado em job_status, pro /status ler depois.
+async function runJob(jobName: string, fn: () => Promise<string>): Promise<void> {
   try {
-    await ingestPoolsJob();
-    await evaluateAlertsJob();
-    await checkPositionsJob();
+    const summary = await fn();
+    await recordJobRun(jobName, { success: true, summary });
   } catch (err) {
-    console.error("[scheduler] erro no ciclo:", err);
+    console.error(`[scheduler] erro no job ${jobName}:`, err);
+    await recordJobRun(jobName, { success: false, errorMessage: err instanceof Error ? err.message : String(err) });
   }
+}
+
+async function runCycle(): Promise<void> {
+  await runJob("ingest-pools", ingestPoolsJob);
+  await runJob("evaluate-alerts", evaluateAlertsJob);
+  await runJob("check-positions", checkPositionsJob);
 }
 
 export function startScheduler(): void {
