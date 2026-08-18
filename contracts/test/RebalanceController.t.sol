@@ -40,7 +40,11 @@ contract RebalanceControllerTest is Test {
             _npm: npm,
             _factory: IUniswapV3Factory(FACTORY_ADDRESS),
             _minRebalanceInterval: 1 hours,
-            _maxTickDeviation: 500,
+            // 100 ticks (~1%) — alinhado com o valor real de produção da
+            // Charm Finance (Alpha Vaults, maxTwapDeviation) e com o próprio
+            // comentário do contrato acima do campo. Era 500 (~5%) antes,
+            // sem lastro — bem mais frouxo que qualquer vault real.
+            _maxTickDeviation: 100,
             _twapWindow: 600,
             _slippageToleranceBps: 200 // 2%
         });
