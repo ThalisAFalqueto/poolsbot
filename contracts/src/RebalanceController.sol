@@ -4,9 +4,17 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {TickMath} from "./vendor/TickMath.sol";
+import {LiquidityAmounts} from "./vendor/LiquidityAmounts.sol";
 import {INonfungiblePositionManager} from "./interfaces/INonfungiblePositionManager.sol";
 import {IUniswapV3Factory} from "./interfaces/IUniswapV3Factory.sol";
 import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
+
+// Nota de licença: TickMath e LiquidityAmounts (Uniswap Labs) são
+// GPL-2.0-or-later, diferente da licença MIT deste arquivo — cada arquivo
+// .sol carrega seu próprio SPDX, e reusar essas bibliotecas de matemática
+// auditadas em vez de reimplementar é uma prática comum no ecossistema
+// Solidity. Vale saber disso antes de relicenciar o projeto todo.
 
 /// @title RebalanceController
 /// @notice RASCUNHO PARA TESTNET — não auditado, não usar com fundos reais.
@@ -25,13 +33,22 @@ import {IUniswapV3Pool} from "./interfaces/IUniswapV3Pool.sol";
 /// o atacante só consegue chamar `rebalance()` dentro das regras abaixo —
 /// nunca transferir fundos pra si, nunca sacar pra outro endereço.
 ///
-/// Limitação conhecida (documentada, não escondida): a proteção contra
-/// manipulação de preço aqui é a checagem de desvio contra o TWAP do
-/// próprio pool (abaixo) — os `amountMin` da remoção de liquidez em si NÃO
-/// são calculados a partir da matemática de liquidez do Uniswap (isso
-/// exigiria portar TickMath/LiquidityAmounts pra Solidity), então essa
-/// etapa aceita qualquer quantia. Hardening antes de produção: computar os
-/// amountMin da remoção a partir do preço validado por TWAP.
+/// Os `amountMin` de CADA etapa (remoção de liquidez e criação da posição
+/// nova) são calculados pelo próprio contrato — nunca recebidos como
+/// parâmetro de quem chama — a partir do preço validado por TWAP
+/// (biblioteca `LiquidityAmounts` original do Uniswap). Isso fecha uma
+/// superfície de ataque real: numa versão anterior, uma chave de automação
+/// comprometida poderia passar `amountMin` artificialmente baixo e
+/// enfraquecer a proteção de slippage por fora. Agora nem o chamador
+/// legítimo escolhe esse número.
+///
+/// Limitação conhecida que continua de pé (documentada, não escondida): a
+/// checagem de TWAP protege contra usar um preço manipulado como
+/// referência, mas não impede a transação em si de ser vista e
+/// sanduichada num mempool público — isso depende de COMO a transação é
+/// enviada pra rede (mempool privado), uma decisão do lado de quem chama
+/// este contrato (o executor do bot), não algo que o contrato resolve
+/// sozinho. Ver README.
 contract RebalanceController is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -51,6 +68,14 @@ contract RebalanceController is ReentrancyGuard {
 
     /// @notice Janela do TWAP (segundos) usada na checagem acima.
     uint32 public immutable twapWindow;
+
+    /// @notice Tolerância de slippage (em pontos-base, 10_000 = 100%)
+    /// aplicada tanto no valor esperado da remoção de liquidez (calculado
+    /// a partir do preço TWAP) quanto na nova posição (calculado a partir
+    /// do que foi de fato coletado). Ex: 100 = 1%.
+    uint256 public immutable slippageToleranceBps;
+
+    uint256 private constant BPS_DENOMINATOR = 10_000;
 
     mapping(address user => address automationKey) public automationKeyOf;
     mapping(address user => bool isPaused) public paused;
@@ -87,20 +112,21 @@ contract RebalanceController is ReentrancyGuard {
     error NoLiquidity();
     error PriceDeviationTooHigh();
     error InsufficientPriceHistory();
-    error ZeroMinAmount();
 
     constructor(
         INonfungiblePositionManager _npm,
         IUniswapV3Factory _factory,
         uint256 _minRebalanceInterval,
         int24 _maxTickDeviation,
-        uint32 _twapWindow
+        uint32 _twapWindow,
+        uint256 _slippageToleranceBps
     ) {
         npm = _npm;
         factory = _factory;
         minRebalanceInterval = _minRebalanceInterval;
         maxTickDeviation = _maxTickDeviation;
         twapWindow = _twapWindow;
+        slippageToleranceBps = _slippageToleranceBps;
     }
 
     /// @notice Define (ou troca) o endereço autorizado a chamar rebalance()
@@ -121,37 +147,45 @@ contract RebalanceController is ReentrancyGuard {
     /// uma posição nova em [newTickLower, newTickUpper) com o mesmo par/fee
     /// — a nova posição vai direto pro dono original, nunca fica neste
     /// contrato. A posição antiga é fechada (burn) ao final.
-    function rebalance(
-        uint256 tokenId,
-        int24 newTickLower,
-        int24 newTickUpper,
-        uint256 amount0Min,
-        uint256 amount1Min,
-        uint256 deadline
-    ) external nonReentrant returns (uint256 newTokenId) {
-        if (amount0Min == 0 || amount1Min == 0) revert ZeroMinAmount();
-
+    function rebalance(uint256 tokenId, int24 newTickLower, int24 newTickUpper, uint256 deadline)
+        external
+        nonReentrant
+        returns (uint256 newTokenId)
+    {
         address owner = npm.ownerOf(tokenId);
         if (msg.sender != owner && msg.sender != automationKeyOf[owner]) revert NotAuthorized();
         if (paused[owner]) revert UserPaused();
         if (!npm.isApprovedForAll(owner, address(this))) revert ControllerNotApproved();
 
-        (,, address token0, address token1, uint24 fee,,, uint128 liquidity,,,,) = npm.positions(tokenId);
+        (,, address token0, address token1, uint24 fee, int24 posTickLower, int24 posTickUpper, uint128 liquidity,,,,)
+        = npm.positions(tokenId);
         if (liquidity == 0) revert NoLiquidity();
 
         bytes32 posKey = _positionKey(owner, token0, token1, fee);
         if (block.timestamp < lastRebalanceAt[posKey] + minRebalanceInterval) revert CooldownActive();
 
-        _checkPriceNotManipulated(factory.getPool(token0, token1, fee));
+        int24 twapTick = _checkPriceNotManipulated(factory.getPool(token0, token1, fee));
 
         lastRebalanceAt[posKey] = block.timestamp;
+
+        // amountMin da remoção calculado a partir do preço validado por
+        // TWAP (não do preço spot, que poderia estar manipulado dentro da
+        // margem tolerada pela checagem acima) — a mesma matemática que
+        // o Uniswap usa pra derivar quanto de cada token uma liquidez
+        // específica representa num dado preço.
+        (uint256 expected0, uint256 expected1) = LiquidityAmounts.getAmountsForLiquidity(
+            TickMath.getSqrtRatioAtTick(twapTick),
+            TickMath.getSqrtRatioAtTick(posTickLower),
+            TickMath.getSqrtRatioAtTick(posTickUpper),
+            liquidity
+        );
 
         (uint256 removed0, uint256 removed1) = npm.decreaseLiquidity(
             INonfungiblePositionManager.DecreaseLiquidityParams({
                 tokenId: tokenId,
                 liquidity: liquidity,
-                amount0Min: 0, // ver limitação documentada no NatSpec do contrato
-                amount1Min: 0,
+                amount0Min: (expected0 * (BPS_DENOMINATOR - slippageToleranceBps)) / BPS_DENOMINATOR,
+                amount1Min: (expected1 * (BPS_DENOMINATOR - slippageToleranceBps)) / BPS_DENOMINATOR,
                 deadline: deadline
             })
         );
@@ -168,6 +202,28 @@ contract RebalanceController is ReentrancyGuard {
         IERC20(token0).forceApprove(address(npm), collected0);
         IERC20(token1).forceApprove(address(npm), collected1);
 
+        // amountMin da posição nova: NÃO é uma fração dos dois valores
+        // coletados (o mint quase nunca usa perto de 100% dos dois lados —
+        // ele consome só a proporção que a faixa nova exige no preço atual,
+        // e sobra do lado que não encaixa, por design do Uniswap). O jeito
+        // certo é simular a mesma conta que o mint faz por dentro: dado
+        // (preço validado por TWAP, faixa nova, os dois valores
+        // coletados), qual liquidez resultaria — e a partir dela, quais
+        // amounts USADOS são esperados. Só então aplica a tolerância.
+        uint128 expectedLiquidity = LiquidityAmounts.getLiquidityForAmounts(
+            TickMath.getSqrtRatioAtTick(twapTick),
+            TickMath.getSqrtRatioAtTick(newTickLower),
+            TickMath.getSqrtRatioAtTick(newTickUpper),
+            collected0,
+            collected1
+        );
+        (uint256 expectedUsed0, uint256 expectedUsed1) = LiquidityAmounts.getAmountsForLiquidity(
+            TickMath.getSqrtRatioAtTick(twapTick),
+            TickMath.getSqrtRatioAtTick(newTickLower),
+            TickMath.getSqrtRatioAtTick(newTickUpper),
+            expectedLiquidity
+        );
+
         uint256 used0;
         uint256 used1;
         (newTokenId,, used0, used1) = npm.mint(
@@ -179,8 +235,8 @@ contract RebalanceController is ReentrancyGuard {
                 tickUpper: newTickUpper,
                 amount0Desired: collected0,
                 amount1Desired: collected1,
-                amount0Min: amount0Min,
-                amount1Min: amount1Min,
+                amount0Min: (expectedUsed0 * (BPS_DENOMINATOR - slippageToleranceBps)) / BPS_DENOMINATOR,
+                amount1Min: (expectedUsed1 * (BPS_DENOMINATOR - slippageToleranceBps)) / BPS_DENOMINATOR,
                 recipient: owner,
                 deadline: deadline
             })
@@ -204,8 +260,9 @@ contract RebalanceController is ReentrancyGuard {
     /// — um desvio grande sugere manipulação de preço em andamento (ex.
     /// alguém acabou de mover o pool com um swap grande pra sandwichar este
     /// rebalance). Reverte se o pool não tiver histórico suficiente em vez
-    /// de deixar passar sem checagem.
-    function _checkPriceNotManipulated(address pool) internal view {
+    /// de deixar passar sem checagem. Retorna o tick do TWAP pra quem
+    /// chamar reusar como referência de preço confiável (ver `rebalance`).
+    function _checkPriceNotManipulated(address pool) internal view returns (int24 twapTick) {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapWindow;
         secondsAgos[1] = 0;
@@ -215,7 +272,7 @@ contract RebalanceController is ReentrancyGuard {
         ) {
             // forge-lint: disable-next-line(unsafe-typecast)
             // seguro: tick sempre cabe em int24 (limite do próprio Uniswap V3, MIN/MAX_TICK)
-            int24 twapTick = int24((tickCumulatives[1] - tickCumulatives[0]) / int56(uint56(twapWindow)));
+            twapTick = int24((tickCumulatives[1] - tickCumulatives[0]) / int56(uint56(twapWindow)));
             (, int24 currentTick,,,,,) = IUniswapV3Pool(pool).slot0();
             int24 delta = currentTick > twapTick ? currentTick - twapTick : twapTick - currentTick;
             if (delta > maxTickDeviation) revert PriceDeviationTooHigh();

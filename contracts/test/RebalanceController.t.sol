@@ -41,7 +41,8 @@ contract RebalanceControllerTest is Test {
             _factory: IUniswapV3Factory(FACTORY_ADDRESS),
             _minRebalanceInterval: 1 hours,
             _maxTickDeviation: 500,
-            _twapWindow: 600
+            _twapWindow: 600,
+            _slippageToleranceBps: 200 // 2%
         });
 
         vm.prank(POSITION_OWNER);
@@ -60,8 +61,6 @@ contract RebalanceControllerTest is Test {
             tokenId: TOKEN_ID,
             newTickLower: newTickLower,
             newTickUpper: newTickUpper,
-            amount0Min: 1,
-            amount1Min: 1,
             deadline: block.timestamp + 1
         });
 
@@ -79,14 +78,14 @@ contract RebalanceControllerTest is Test {
 
     function test_rebalance_revertsWhenCalledTooSoonAgain() public {
         vm.prank(automationBot);
-        uint256 newTokenId = controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
+        uint256 newTokenId = controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
 
         vm.prank(POSITION_OWNER);
         npm.setApprovalForAll(address(controller), true); // aprovação é por dono, já vale pra nova posição também
 
         vm.prank(automationBot);
         vm.expectRevert(RebalanceController.CooldownActive.selector);
-        controller.rebalance(newTokenId, OLD_TICK_LOWER + 120, OLD_TICK_UPPER + 120, 1, 1, block.timestamp + 1);
+        controller.rebalance(newTokenId, OLD_TICK_LOWER + 120, OLD_TICK_UPPER + 120, block.timestamp + 1);
     }
 
     function test_rebalance_revertsWhenUserPaused() public {
@@ -95,20 +94,14 @@ contract RebalanceControllerTest is Test {
 
         vm.prank(automationBot);
         vm.expectRevert(RebalanceController.UserPaused.selector);
-        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
+        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
     }
 
     function test_rebalance_revertsForUnauthorizedCaller() public {
         address stranger = address(0xBAD);
         vm.prank(stranger);
         vm.expectRevert(RebalanceController.NotAuthorized.selector);
-        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
-    }
-
-    function test_rebalance_revertsWithZeroMinAmounts() public {
-        vm.prank(automationBot);
-        vm.expectRevert(RebalanceController.ZeroMinAmount.selector);
-        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 0, 1, block.timestamp + 1);
+        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
     }
 
     function test_revokeApproval_blocksFutureRebalance() public {
@@ -117,7 +110,7 @@ contract RebalanceControllerTest is Test {
 
         vm.prank(automationBot);
         vm.expectRevert(RebalanceController.ControllerNotApproved.selector);
-        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
+        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
     }
 
     // Constante conhecida do Uniswap V3 core (TickMath.MIN_SQRT_RATIO + 1) —
@@ -141,7 +134,7 @@ contract RebalanceControllerTest is Test {
 
         vm.prank(automationBot);
         vm.expectRevert(RebalanceController.PriceDeviationTooHigh.selector);
-        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
+        controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
     }
 
     /// @dev Callback exigido pelo Uniswap V3 durante swap() — paga o token
@@ -154,7 +147,7 @@ contract RebalanceControllerTest is Test {
 
     function test_ownerCanAlwaysCallDirectly() public {
         vm.prank(POSITION_OWNER);
-        uint256 newTokenId = controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, 1, 1, block.timestamp + 1);
+        uint256 newTokenId = controller.rebalance(TOKEN_ID, OLD_TICK_LOWER + 60, OLD_TICK_UPPER + 60, block.timestamp + 1);
         assertEq(npm.ownerOf(newTokenId), POSITION_OWNER);
     }
 }
