@@ -28,6 +28,23 @@ function volatilityFactor(sigma: number | null): number {
   return 1 / (1 + sigma);
 }
 
+// Giro semanal (volume7d/TVL) a partir do qual o fator de atividade satura
+// em 1.0. Abaixo disso, penaliza linearmente — TVL alto mas pouco negociado
+// é liquidez "parada": o APY reportado fica mais raso (poucos trades reais
+// sustentando o número), mesmo passando nos outros filtros de TVL/consistência.
+// Não é redundante com apy: TVL usa o pool inteiro como base, apyBase da
+// DefiLlama assume uma faixa de concentração padrão — giro real é uma
+// terceira leitura, direta, de quanto capital de fato move por lá.
+// Ausência de volumeUsd7d (comum fora de pools de DEX, ex: staking) não
+// penaliza nem beneficia — mesmo tratamento neutro de sigma/apyMean30d.
+const VOLUME_TURNOVER_FULL_TRUST = 0.5;
+
+function volumeFactor(volumeUsd7d: number | null, tvlUsd: number): number {
+  if (volumeUsd7d === null || tvlUsd <= 0) return 1;
+  const turnover = volumeUsd7d / tvlUsd;
+  return Math.min(1, turnover / VOLUME_TURNOVER_FULL_TRUST);
+}
+
 // O sinal mais importante contra APYs infladas: quanto o valor ATUAL diverge
 // da própria média de 30 dias do pool. Um pool com apy=461% e apyMean30d=45%
 // está reportando um pico transitório (ex: um dia de volume/arbitragem fora
@@ -47,7 +64,8 @@ export function computeRiskAdjustedScore(pool: RankablePool): number {
     tvlFactor(pool.tvlUsd) *
     ilFactor(pool.ilRisk) *
     volatilityFactor(pool.sigma) *
-    stabilityFactor(pool.apy, pool.apyMean30d)
+    stabilityFactor(pool.apy, pool.apyMean30d) *
+    volumeFactor(pool.volumeUsd7d, pool.tvlUsd)
   );
 }
 

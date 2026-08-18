@@ -67,6 +67,7 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
       ilRisk: p.ilRisk,
       sigma: p.sigma,
       apyMean30d: p.apyMean30d,
+      volumeUsd7d: p.volumeUsd7d,
     }))
     .filter(isEligiblePool);
 
@@ -92,7 +93,7 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
       `Melhores pools em ${chain} com APY ≥ ${minApyPct}%, por retorno ajustado a risco:`,
       ...lines,
       "",
-      "Score = APY × liquidez (TVL) × risco de IL × estabilidade (volatilidade) × consistência (vs. média de 30d). Use /pool <id> para o detalhamento de cada pool.",
+      "Score = APY × liquidez (TVL) × risco de IL × estabilidade (volatilidade) × consistência (vs. média de 30d) × giro real (volume/TVL). Use /pool <id> para o detalhamento de cada pool.",
       `Piso de APY ajustável com --min <valor> (ex: /yield ${chain} --min 10).`,
       `Filtros de segurança fixos (não ajustáveis): TVL ≥ $${MIN_TVL_USD.toLocaleString("pt-BR")} e APY ≤ ${MAX_APY_VS_MEAN30D_RATIO}x a média de 30d.`,
     ].join("\n")

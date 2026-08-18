@@ -13,6 +13,7 @@ function makePool(overrides: Partial<RankablePool> = {}): RankablePool {
     ilRisk: "no",
     sigma: null,
     apyMean30d: null,
+    volumeUsd7d: null,
     ...overrides,
   };
 }
@@ -68,6 +69,24 @@ describe("computeRiskAdjustedScore", () => {
     const withMean = makePool({ apy: 10, apyMean30d: 10 });
     const withoutMean = makePool({ apy: 10, apyMean30d: null });
     expect(computeRiskAdjustedScore(withoutMean)).toBeCloseTo(computeRiskAdjustedScore(withMean), 5);
+  });
+
+  it("giro (volume7d/TVL) alto o suficiente não penaliza (fator satura em 1.0)", () => {
+    // turnover = 600k/1M = 0.6, acima do limiar de 0.5
+    const pool = makePool({ apy: 10, tvlUsd: 1_000_000, volumeUsd7d: 600_000 });
+    expect(computeRiskAdjustedScore(pool)).toBeCloseTo(10, 5);
+  });
+
+  it("giro baixo penaliza proporcionalmente — TVL parado, pouco negociado", () => {
+    // turnover = 250k/1M = 0.25, metade do limiar de 0.5 -> fator 0.5
+    const pool = makePool({ apy: 10, tvlUsd: 1_000_000, volumeUsd7d: 250_000 });
+    expect(computeRiskAdjustedScore(pool)).toBeCloseTo(5, 5);
+  });
+
+  it("volumeUsd7d ausente é neutro (comum fora de pools de DEX)", () => {
+    const withVolume = makePool({ apy: 10, tvlUsd: 1_000_000, volumeUsd7d: 600_000 });
+    const withoutVolume = makePool({ apy: 10, tvlUsd: 1_000_000, volumeUsd7d: null });
+    expect(computeRiskAdjustedScore(withoutVolume)).toBeCloseTo(computeRiskAdjustedScore(withVolume), 5);
   });
 });
 

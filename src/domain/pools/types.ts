@@ -11,4 +11,5 @@ export type RankablePool = {
   ilRisk: string;
   sigma: number | null;
   apyMean30d: number | null;
+  volumeUsd7d: number | null;
 };

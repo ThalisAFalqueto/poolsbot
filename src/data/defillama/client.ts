@@ -19,6 +19,7 @@ export type DefiLlamaPool = {
   apyMean30d: number | null; // média de APY dos últimos 30 dias — usado pra detectar picos transitórios
   apyBase7d: number | null; // APY base assumindo faixa de concentração padrão (0.3%/0.001%) — não é a faixa real
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
+  volumeUsd7d: number | null; // volume de trade dos últimos 7d — null em pools que não são DEX (ex: staking)
 };
 
 type YieldsResponse = {

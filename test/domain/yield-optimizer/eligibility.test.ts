@@ -13,6 +13,7 @@ function makePool(overrides: Partial<RankablePool> = {}): RankablePool {
     ilRisk: "no",
     sigma: null,
     apyMean30d: 10,
+    volumeUsd7d: null,
     ...overrides,
   };
 }
