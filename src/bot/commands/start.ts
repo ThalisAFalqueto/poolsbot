@@ -18,6 +18,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/alerts — lista seus alertas e o estado atual",
       "/unalert <id> — remove um alerta",
       "/yield <chain> [symbol] [--min <apy%>] — ranking de pools por retorno ajustado a risco (piso padrão 36%/ano)",
+      "/range <poolId> — sugere faixa de LP calibrada por volatilidade real ANTES de abrir a posição (Uniswap V3)",
       "/addwallet <endereço> [rótulo] — vincula uma wallet (pode vincular mais de uma; só endereço público, nunca chave privada)",
       "/wallets — lista suas wallets vinculadas",
       "/removewallet <endereço> — desvincula uma wallet",

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { isAddress } from "viem";
 import { chains } from "../../src/config/chains.js";
-import { fetchPositionsForWallet, fetchUncollectedFees, type UncollectedFees } from "../../src/data/onchain/client.js";
+import { fetchPositionsForWallet, fetchUncollectedFees, getPoolInfo, type UncollectedFees } from "../../src/data/onchain/client.js";
 import type { OnchainPosition } from "../../src/domain/lp-rebalance/types.js";
 
 // Estes testes chamam o RPC real da Arbitrum (o projeto já exige
@@ -65,6 +65,41 @@ describe("data/onchain/client (RPC real)", () => {
   it("fetchUncollectedFees com lista vazia retorna Map vazio sem chamar RPC", async () => {
     const emptyFees = await fetchUncollectedFees("arbitrum", WALLET_WITH_POSITIONS, []);
     expect(emptyFees.size).toBe(0);
+  });
+});
+
+// Par/pool reais e conhecidos (WBTC/USDC 0.05% na Arbitrum, o mesmo pool
+// usado como referência ao longo do projeto) — valida getPoolInfo (usado
+// por /range) sem depender de nenhuma posição já aberta.
+const WBTC_ARBITRUM = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f";
+const USDC_ARBITRUM = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831";
+const WBTC_USDC_FEE = 500;
+
+describe("getPoolInfo (RPC real)", () => {
+  it("resolve o pool real e reporta token0/token1 na ordem canônica (ordenada por endereço)", async () => {
+    const info = await getPoolInfo("arbitrum", WBTC_ARBITRUM, USDC_ARBITRUM, WBTC_USDC_FEE);
+    expect(info).not.toBeNull();
+    expect(isAddress(info!.poolAddress)).toBe(true);
+    expect(info!.sqrtPriceX96).toBeGreaterThan(0n);
+
+    // token0 deve ser o endereço numericamente menor (convenção Uniswap V3)
+    expect(info!.token0.address.toLowerCase() < info!.token1.address.toLowerCase()).toBe(true);
+    const symbols = [info!.token0.symbol, info!.token1.symbol].sort();
+    expect(symbols).toEqual(["USDC", "WBTC"]);
+    expect(info!.token0.decimals).toBeGreaterThan(0);
+    expect(info!.token1.decimals).toBeGreaterThan(0);
+  });
+
+  it("funciona independente da ordem dos endereços de entrada (getPool é simétrico)", async () => {
+    const a = await getPoolInfo("arbitrum", WBTC_ARBITRUM, USDC_ARBITRUM, WBTC_USDC_FEE);
+    const b = await getPoolInfo("arbitrum", USDC_ARBITRUM, WBTC_ARBITRUM, WBTC_USDC_FEE);
+    expect(a!.poolAddress).toBe(b!.poolAddress);
+  });
+
+  it("retorna null pra um par/fee sem pool criado", async () => {
+    const deadToken = "0x000000000000000000000000000000000000dEaD";
+    const info = await getPoolInfo("arbitrum", WBTC_ARBITRUM, deadToken, WBTC_USDC_FEE);
+    expect(info).toBeNull();
   });
 });
 

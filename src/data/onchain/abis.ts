@@ -79,6 +79,8 @@ export const uniswapV3FactoryAbi = [
 ] as const;
 
 export const uniswapV3PoolAbi = [
+  { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   {
     type: "function",
     name: "slot0",

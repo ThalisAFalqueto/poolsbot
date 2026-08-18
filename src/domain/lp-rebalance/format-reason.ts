@@ -48,7 +48,7 @@ function currentPriceLine(position: OnchainPosition): string {
   return `Preço atual: ${formatPrice(price)} ${position.token1.symbol} por ${position.token0.symbol}`;
 }
 
-function formatWindowDuration(seconds: number): string {
+export function formatWindowDuration(seconds: number): string {
   if (seconds >= 24 * 3600) return `${Math.round(seconds / (24 * 3600))}d`;
   return `${Math.round(seconds / 3600)}h`;
 }

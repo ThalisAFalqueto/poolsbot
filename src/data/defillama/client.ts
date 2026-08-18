@@ -20,6 +20,8 @@ export type DefiLlamaPool = {
   apyBase7d: number | null; // APY base assumindo faixa de concentração padrão (0.3%/0.001%) — não é a faixa real
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
   volumeUsd7d: number | null; // volume de trade dos últimos 7d — null em pools que não são DEX (ex: staking)
+  poolMeta: string | null; // pra Uniswap V3: rótulo do fee tier, ex: "0.05%" (não o valor numérico 500 que o contrato usa)
+  underlyingTokens: string[] | null; // endereços dos tokens do par — null em pools que não são de 2 tokens
 };
 
 type YieldsResponse = {
@@ -48,6 +50,23 @@ export async function fetchAllPools(): Promise<DefiLlamaPool[]> {
 export async function getPoolById(poolId: string): Promise<DefiLlamaPool | undefined> {
   const pools = await fetchAllPools();
   return pools.find((p) => p.pool === poolId);
+}
+
+const FEE_TIER_BY_LABEL: Record<string, number> = {
+  "0.01%": 100,
+  "0.05%": 500,
+  "0.3%": 3000,
+  "1%": 10000,
+};
+
+// poolMeta da DefiLlama pra pools Uniswap V3 vem como o rótulo do fee tier
+// (ex: "0.05%"), não o valor numérico bruto que o contrato usa (500). Só
+// cobre os 4 fee tiers padrão do Uniswap V3 — qualquer outro rótulo (ou
+// poolMeta ausente/de outro protocolo) retorna null, deixando quem chama
+// decidir como lidar (não finge um fee tier que não foi confirmado).
+export function parseFeeTierLabel(poolMeta: string | null): number | null {
+  if (!poolMeta) return null;
+  return FEE_TIER_BY_LABEL[poolMeta.trim()] ?? null;
 }
 
 export async function searchPools(params: {

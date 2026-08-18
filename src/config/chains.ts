@@ -50,3 +50,11 @@ export type ChainKey = keyof typeof chains;
 export function getActiveChains(): ChainKey[] {
   return (Object.keys(chains) as ChainKey[]).filter((key) => chains[key].rpcUrl !== undefined);
 }
+
+// Resolve o nome de chain usado pela DefiLlama (ex: "Arbitrum") de volta
+// pra nossa chave interna — usado quando o ponto de partida é um pool da
+// DefiLlama (que não conhece nosso ChainKey) e precisamos decidir se dá
+// pra ler on-chain nele.
+export function chainKeyFromDefillamaName(name: string): ChainKey | undefined {
+  return (Object.keys(chains) as ChainKey[]).find((key) => chains[key].defillamaChainName.toLowerCase() === name.toLowerCase());
+}

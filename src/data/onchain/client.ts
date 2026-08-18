@@ -1,4 +1,4 @@
-import { createPublicClient, http, type Address, type PublicClient } from "viem";
+import { createPublicClient, http, zeroAddress, type Address, type PublicClient } from "viem";
 import { chains, type ChainKey } from "../../config/chains.js";
 import { erc20Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, uniswapV3PoolAbi } from "./abis.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
@@ -240,6 +240,72 @@ export async function fetchPositionsForWallets(
     }
   }
   return [...positionsByChain.entries()].map(([chain, positions]) => ({ chain, positions }));
+}
+
+export type PoolInfo = {
+  poolAddress: Address;
+  sqrtPriceX96: bigint;
+  currentTick: number;
+  token0: { address: Address; decimals: number; symbol: string };
+  token1: { address: Address; decimals: number; symbol: string };
+};
+
+// Resolve um pool Uniswap V3 a partir de dois endereços de token (ordem não
+// importa — getPool() é simétrico na factory real) + fee tier. Diferente de
+// fetchPositionsForWallet (que lê token0/token1 já resolvidos de uma posição
+// NFT existente), aqui NÃO existe posição nenhuma ainda — por isso lê
+// token0()/token1() diretamente do pool em vez de assumir que a ordem dos
+// endereços de entrada bate com a ordem canônica (ordenada por endereço)
+// que o Uniswap usa internamente. Usado por /range, que sugere faixa ANTES
+// de abrir a posição.
+export async function getPoolInfo(chainKey: ChainKey, tokenA: Address, tokenB: Address, fee: number): Promise<PoolInfo | null> {
+  const publicClient = getPublicClient(chainKey);
+  const poolAddress = await publicClient.readContract({
+    address: chains[chainKey].uniswapV3.factory,
+    abi: uniswapV3FactoryAbi,
+    functionName: "getPool",
+    args: [tokenA, tokenB, fee],
+  });
+  if (poolAddress === zeroAddress) return null; // sem pool criado pra esse par/fee
+
+  const poolContract = { address: poolAddress, abi: uniswapV3PoolAbi } as const;
+  const [slot0Result, token0Result, token1Result] = await publicClient.multicall({
+    contracts: [
+      { ...poolContract, functionName: "slot0" } as const,
+      { ...poolContract, functionName: "token0" } as const,
+      { ...poolContract, functionName: "token1" } as const,
+    ],
+    allowFailure: true,
+  });
+  if (slot0Result?.status !== "success" || token0Result?.status !== "success" || token1Result?.status !== "success") {
+    return null;
+  }
+  const [sqrtPriceX96, currentTick] = slot0Result.result;
+  const token0Address = token0Result.result;
+  const token1Address = token1Result.result;
+
+  const tokenResults = await publicClient.multicall({
+    contracts: [token0Address, token1Address].flatMap(
+      (addr) =>
+        [
+          { address: addr, abi: erc20Abi, functionName: "decimals" } as const,
+          { address: addr, abi: erc20Abi, functionName: "symbol" } as const,
+        ] as const
+    ),
+    allowFailure: true,
+  });
+  const decimals0 = tokenResults[0]?.status === "success" ? (tokenResults[0].result as number) : 18;
+  const symbol0 = tokenResults[1]?.status === "success" ? (tokenResults[1].result as string) : "???";
+  const decimals1 = tokenResults[2]?.status === "success" ? (tokenResults[2].result as number) : 18;
+  const symbol1 = tokenResults[3]?.status === "success" ? (tokenResults[3].result as string) : "???";
+
+  return {
+    poolAddress,
+    sqrtPriceX96,
+    currentTick,
+    token0: { address: token0Address, decimals: decimals0, symbol: symbol0 },
+    token1: { address: token1Address, decimals: decimals1, symbol: symbol1 },
+  };
 }
 
 // Busca os checkpoints de tickCumulative do oráculo nativo do pool — 1
