@@ -6,6 +6,7 @@ import { estimateRebalanceCost, type GasCostEstimate } from "../../domain/lp-reb
 import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
 import { evaluatePosition } from "../../domain/lp-rebalance/evaluate-position.js";
 import { formatIlLine } from "../../domain/lp-rebalance/format-reason.js";
+import { getAmountsForLiquidity } from "../../domain/lp-rebalance/liquidity-math.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
 import { suggestRange } from "../../domain/lp-rebalance/range-suggestion.js";
 import type { OnchainPosition, PositionRangeSuggestion, PositionState } from "../../domain/lp-rebalance/types.js";
@@ -72,21 +73,51 @@ async function estimateGasCostIfOutOfRange(
   return estimateRebalanceCost(gasPriceWei, position, chains[position.chain].wethAddress, currentPrice);
 }
 
+// Custo de rebalance como fração do valor ATUAL da posição — insumo γ da
+// margem calibrada por custo/benefício (ver computeMarginFraction em
+// volatility-range.ts). null quando não dá pra estimar (par sem WETH pra
+// converter o custo de gas, ou preço de gas indisponível no ciclo); nesse
+// caso a margem cai pro custo de referência (fator neutro), sem travar a
+// sugestão. Reaproveita liquidity/tick/preço já lidos on-chain — nenhuma
+// chamada de RPC extra.
+function computeGasCostFraction(position: OnchainPosition, gasCost: GasCostEstimate | null): number | null {
+  if (gasCost === null || gasCost.costToken1 === null) return null;
+
+  const currentPrice = sqrtPriceX96ToPrice(position.sqrtPriceX96, position.token0.decimals, position.token1.decimals);
+  const { amount0, amount1 } = getAmountsForLiquidity({
+    liquidity: position.liquidity,
+    sqrtPriceX96: position.sqrtPriceX96,
+    tickLower: position.tickLower,
+    tickUpper: position.tickUpper,
+    decimals0: position.token0.decimals,
+    decimals1: position.token1.decimals,
+  });
+  const positionValueToken1 = amount0 * currentPrice + amount1;
+  if (positionValueToken1 <= 0) return null;
+
+  return gasCost.costToken1 / positionValueToken1;
+}
+
 // Tenta a cascata de janelas (7d -> 24h -> 6h) via oráculo nativo do pool
 // (1 chamada de RPC por tentativa, independente da janela) — usa a
 // primeira que tiver histórico suficiente. Se nenhuma tiver (pool novo ou
 // pouco usado), cai pro heurístico de espelhar a largura atual, que nunca
 // falha (sem RPC). Só roda quando a posição está fora de range — em
 // range, o resultado nunca é usado.
-async function suggestRangeIfOutOfRange(position: OnchainPosition): Promise<PositionRangeSuggestion | null> {
+async function suggestRangeIfOutOfRange(
+  position: OnchainPosition,
+  gasCost: GasCostEstimate | null
+): Promise<PositionRangeSuggestion | null> {
   if (isInRange(position.currentTick, position.tickLower, position.tickUpper)) return null;
+
+  const gasCostFraction = computeGasCostFraction(position, gasCost);
 
   for (const { windowSeconds, checkpointCount } of VOLATILITY_WINDOWS) {
     const secondsAgos = buildSecondsAgos(windowSeconds, checkpointCount);
     const tickCumulatives = await fetchTickCumulatives(position.chain, position.poolAddress, secondsAgos);
     if (tickCumulatives) {
       const intervalTicks = intervalAverageTicks(tickCumulatives, secondsAgos);
-      const range = suggestVolatilityRange(intervalTicks, position.currentTick, position.fee);
+      const range = suggestVolatilityRange(intervalTicks, position.currentTick, position.fee, gasCostFraction);
       return { range, source: "volatility", volatilityWindowSeconds: windowSeconds };
     }
   }
@@ -150,7 +181,7 @@ export async function checkPositionsJob(): Promise<string> {
             : await getPositionState(record.id);
 
           const gasCost = await estimateGasCostIfOutOfRange(gasPriceCache, position);
-          const suggestedRange = await suggestRangeIfOutOfRange(position);
+          const suggestedRange = await suggestRangeIfOutOfRange(position, gasCost);
           const { nextState, notification } = evaluatePosition({ position, state, now, gasCost, suggestedRange });
           await updatePositionState(record.id, nextState);
 

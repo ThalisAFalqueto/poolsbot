@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSecondsAgos,
+  computeMarginFraction,
   intervalAverageTicks,
   suggestVolatilityRange,
 } from "../../../src/domain/lp-rebalance/volatility-range.js";
@@ -35,35 +36,97 @@ describe("intervalAverageTicks", () => {
   });
 });
 
-describe("suggestVolatilityRange", () => {
-  it("cobre o range observado com margem de 20%", () => {
-    const intervalTicks = [90, 100, 110, 95]; // min=90, max=110, width=20
-    const result = suggestVolatilityRange(intervalTicks, 100, 3000); // fee 0.3%, spacing=60
+describe("computeMarginFraction", () => {
+  const flatTicks = [100, 100, 100, 100]; // variância zero
 
-    // margem = 20*0.2 = 4 -> [86, 114], arredondado pro spacing de 60 -> [60, 120]
-    expect(result.tickLower).toBeLessThanOrEqual(86);
-    expect(result.tickUpper).toBeGreaterThanOrEqual(114);
+  it("fica na faixa do comportamento anterior (~20%) num cenário parecido com a referência", () => {
+    // fee 0.05% == fee tier de referência, gasCostFraction null (usa custo de
+    // referência), volatilidade moderada — não é mais exatamente 20% (a
+    // referência é uma calibração, não uma identidade), mas fica perto.
+    const margin = computeMarginFraction(null, 500, [90, 100, 110, 95, 105, 98]);
+    expect(margin).toBeGreaterThan(0.1);
+    expect(margin).toBeLessThan(0.3);
+  });
+
+  it("custo de gas maior (fração do valor da posição) aumenta a margem", () => {
+    const low = computeMarginFraction(0.0005, 3000, flatTicks);
+    const high = computeMarginFraction(0.02, 3000, flatTicks);
+    expect(high).toBeGreaterThan(low);
+  });
+
+  it("fee tier maior reduz a margem — mais compensa ficar concentrado", () => {
+    const lowFeeTier = computeMarginFraction(null, 500, flatTicks); // 0.05%
+    const highFeeTier = computeMarginFraction(null, 10000, flatTicks); // 1%
+    expect(highFeeTier).toBeLessThan(lowFeeTier);
+  });
+
+  it("volatilidade maior (dispersão dos ticks médios) aumenta a margem", () => {
+    const low = computeMarginFraction(null, 3000, flatTicks);
+    const volatile = computeMarginFraction(null, 3000, [0, 500, -300, 800, -600, 400]);
+    expect(volatile).toBeGreaterThan(low);
+  });
+
+  it("nunca sai dos limites [5%, 60%], mesmo em cenários extremos", () => {
+    const extremeCost = computeMarginFraction(5, 500, [0, 5000, -3000, 8000]); // custo de gas absurdo
+    expect(extremeCost).toBeLessThanOrEqual(0.6);
+
+    const tinyCostHighFee = computeMarginFraction(0.00001, 10000, flatTicks); // custo ínfimo, fee tier alto
+    expect(tinyCostHighFee).toBeGreaterThanOrEqual(0.05);
+  });
+
+  it("gasCostFraction null usa o custo de referência (não é o mesmo que custo zero)", () => {
+    // fee 0.05% == tier de referência, pra não mascarar a diferença no piso
+    // de 5% (com fee=3000 os dois lados clampam pro mesmo piso).
+    const nullCost = computeMarginFraction(null, 500, flatTicks);
+    const zeroCost = computeMarginFraction(0, 500, flatTicks);
+    expect(nullCost).toBeGreaterThan(zeroCost);
+  });
+});
+
+describe("suggestVolatilityRange", () => {
+  it("cobre o range observado com a margem calculada por computeMarginFraction", () => {
+    const intervalTicks = [90, 100, 110, 95]; // min=90, max=110, width=20
+    const fee = 3000; // spacing=60
+    const marginFraction = computeMarginFraction(null, fee, intervalTicks);
+    const margin = 20 * marginFraction;
+
+    const result = suggestVolatilityRange(intervalTicks, 100, fee, null);
+
+    expect(result.tickLower).toBeLessThanOrEqual(90 - margin);
+    expect(result.tickUpper).toBeGreaterThanOrEqual(110 + margin);
     expect(result.tickLower % 60).toBe(0);
     expect(result.tickUpper % 60).toBe(0);
   });
 
+  it("uma posição com custo de gas alto (fração da posição) recebe uma faixa mais larga que uma com custo baixo", () => {
+    // width base grande (via currentTick bem fora dos intervalTicks) pra a
+    // diferença de margem sobreviver ao arredondamento pro tickSpacing.
+    const intervalTicks = [0, 0, 0, 0];
+    const narrow = suggestVolatilityRange(intervalTicks, 1000, 3000, 0.0005);
+    const wide = suggestVolatilityRange(intervalTicks, 1000, 3000, 0.02);
+
+    const narrowWidth = narrow.tickUpper - narrow.tickLower;
+    const wideWidth = wide.tickUpper - wide.tickLower;
+    expect(wideWidth).toBeGreaterThan(narrowWidth);
+  });
+
   it("inclui o tick atual mesmo se estiver fora do range observado historicamente", () => {
     const intervalTicks = [90, 95, 100]; // max histórico = 100
-    const result = suggestVolatilityRange(intervalTicks, 500, 3000); // preço atual bem acima do observado
+    const result = suggestVolatilityRange(intervalTicks, 500, 3000, null); // preço atual bem acima do observado
 
     expect(result.tickUpper).toBeGreaterThan(500);
   });
 
   it("garante largura mínima de 1 tickSpacing quando não há movimento na janela", () => {
     const intervalTicks = [100, 100, 100];
-    const result = suggestVolatilityRange(intervalTicks, 100, 3000);
+    const result = suggestVolatilityRange(intervalTicks, 100, 3000, null);
 
     expect(result.tickUpper).toBeGreaterThan(result.tickLower);
   });
 
   it("nunca sugere além dos limites absolutos de tick", () => {
     const intervalTicks = [887000, 887272];
-    const result = suggestVolatilityRange(intervalTicks, 887272, 3000);
+    const result = suggestVolatilityRange(intervalTicks, 887272, 3000, null);
 
     expect(result.tickUpper).toBeLessThanOrEqual(887272);
   });

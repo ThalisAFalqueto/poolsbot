@@ -18,12 +18,100 @@ export const VOLATILITY_WINDOWS: VolatilityWindow[] = [
   { windowSeconds: 6 * 3600, checkpointCount: 12 },
 ];
 
-// Margem adicionada em cada lado do range observado (mínimo–máximo) antes
-// de virar a faixa sugerida — cobrir exatamente o que já foi visto
-// historicamente significa que qualquer novo extremo, por menor que seja,
-// já rompe de novo. 20% é uma folga arbitrária mas razoável, não um valor
-// calibrado estatisticamente.
-export const SAFETY_MARGIN_FRACTION = 0.2;
+// ---------------------------------------------------------------------
+// Margem de segurança adicionada em cada lado do range observado.
+//
+// Direção inspirada em Fukasawa, Maire & Wunsch (arXiv:2309.08431),
+// δ* = 4γ/(8π − σ²): a largura ótima de uma posição concentrada CRESCE
+// com o custo de rebalancear (γ) e com a variância do preço (σ²), e CAI
+// com a taxa de fee do pool (π) — quanto mais a pool paga por
+// concentração, mais compensa ficar apertado e rebalancear com mais
+// frequência.
+//
+// Isso NÃO é uma implementação literal da fórmula do paper: replicar o
+// δ* exato exigiria normalizar γ e σ² nas mesmas unidades de
+// tempo/valor do modelo contínuo deles, o que os dados discretos do
+// oráculo TWAP não sustentam sem mais estudo (ver documento de
+// estratégia). O que é replicado com fidelidade é (a) a DIREÇÃO
+// comprovada de cada alavanca e (b) o "8" interno, que pondera fee
+// contra variância dentro do mesmo parênteses do paper — o "4" externo
+// foi removido de propósito porque cancela exatamente quando se calcula
+// uma RAZÃO contra um cenário de referência, que é a abordagem usada
+// aqui: em vez de tentar produzir o δ* absoluto em unidades não
+// verificadas, calculamos o quanto o cenário real se desvia de um
+// cenário "típico" (fee tier comum, custo de gas típico, volatilidade
+// moderada) e aplicamos essa razão em cima da margem de 20% que já
+// estava em produção — assim o comportamento anterior continua sendo o
+// centro, não um salto para um número não calibrado.
+const DEFAULT_MARGIN_FRACTION = 0.2;
+const MIN_MARGIN_FRACTION = 0.05;
+const MAX_MARGIN_FRACTION = 0.6;
+
+// Âncoras do cenário de referência — não são medidas, são escolhas de
+// calibração para manter 20% como ponto central num caso "típico":
+// fee tier de 0.05% (comum em pares major/stable), custo de rebalance
+// ~0.2% do valor da posição, volatilidade equivalente a ~100 ticks de
+// desvio padrão entre checkpoints consecutivos (pool moderadamente
+// ativo).
+const REFERENCE_GAS_COST_FRACTION = 0.002;
+const REFERENCE_FEE_RATE = 0.0005;
+const REFERENCE_TICK_STDDEV = 100;
+
+const TICK_LOG_STEP = Math.log(1.0001); // 1 tick ≈ essa fração de log-preço
+const REFERENCE_VARIANCE = (REFERENCE_TICK_STDDEV * TICK_LOG_STEP) ** 2;
+const REFERENCE_VALUE = REFERENCE_GAS_COST_FRACTION / (8 * REFERENCE_FEE_RATE - REFERENCE_VARIANCE);
+
+function feeRateFromTier(fee: number): number {
+  return fee / 1_000_000; // unidades Uniswap: fee=3000 -> 0.003 (0.3%)
+}
+
+function sampleStdDev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+// Variância do log-preço por intervalo de checkpoint, a partir da
+// dispersão das DIFERENÇAS entre ticks médios consecutivos — usar os
+// níveis brutos misturaria tendência de preço (drift) com oscilação
+// (volatilidade), que é o que a fórmula quer medir.
+function priceVarianceFromIntervalTicks(intervalTicks: number[]): number {
+  if (intervalTicks.length < 2) return 0;
+  const diffs = intervalTicks.slice(1).map((t, i) => t - intervalTicks[i]!);
+  const tickStdDev = sampleStdDev(diffs);
+  const logStdDev = tickStdDev * TICK_LOG_STEP;
+  return logStdDev * logStdDev;
+}
+
+function costBenefitValue(gasCostFraction: number, feeRate: number, variance: number): number {
+  const denominator = 8 * feeRate - variance;
+  // Piso pra evitar denominador ~0 ou negativo — caso degenerado do
+  // paper (pool volátil demais pra compensar o fee tier, σ² >= 8π), onde
+  // a fórmula original não tem ótimo bem definido. Em vez de estourar
+  // pra infinito/negativo, satura no comportamento de "margem máxima" via
+  // o clamp final.
+  const denominatorFloor = 8 * REFERENCE_FEE_RATE * 0.05;
+  return gasCostFraction / Math.max(denominator, denominatorFloor);
+}
+
+// gasCostFraction: custo estimado de rebalance como fração do valor
+// atual da posição (ex: 0.001 = 0.1%). null quando não dá pra estimar
+// (par sem WETH pra converter o custo de gas, ou preço de gas
+// indisponível no ciclo) — nesse caso assume o custo de referência
+// (fator neutro), deixando fee tier e volatilidade reais ajustarem a
+// margem mesmo assim.
+export function computeMarginFraction(gasCostFraction: number | null, fee: number, intervalTicks: number[]): number {
+  const feeRate = feeRateFromTier(fee);
+  const variance = priceVarianceFromIntervalTicks(intervalTicks);
+  const actualGasCostFraction = gasCostFraction ?? REFERENCE_GAS_COST_FRACTION;
+
+  const actualValue = costBenefitValue(actualGasCostFraction, feeRate, variance);
+  const ratio = actualValue / REFERENCE_VALUE;
+  const margin = DEFAULT_MARGIN_FRACTION * ratio;
+
+  return Math.min(MAX_MARGIN_FRACTION, Math.max(MIN_MARGIN_FRACTION, margin));
+}
 
 // secondsAgos em ORDEM DECRESCENTE terminando em 0 (mais antigo primeiro),
 // formato exigido pelo observe() do Uniswap V3.
@@ -53,18 +141,26 @@ export function intervalAverageTicks(tickCumulatives: readonly bigint[], seconds
 
 // Sugere uma faixa que cobre o range de preço REALMENTE observado na
 // janela (mínimo–máximo dos ticks médios por intervalo), com margem de
-// segurança — não é um modelo estatístico (nem desvio padrão, nem
-// intervalo de confiança), é "onde o preço andou de verdade, mais uma
-// folga". Inclui o tick atual na amostra, pra nunca sugerir uma faixa que
-// já nasce fora do preço agora (ex: pool muito parado na janela, mas o
+// segurança calibrada por custo/benefício (ver computeMarginFraction) —
+// não é um modelo estatístico completo (nem desvio padrão puro, nem
+// intervalo de confiança formal), é "onde o preço andou de verdade, mais
+// uma folga que reage a custo de gas, fee tier e volatilidade reais".
+// Inclui o tick atual na amostra, pra nunca sugerir uma faixa que já
+// nasce fora do preço agora (ex: pool muito parado na janela, mas o
 // preço se moveu logo antes do checkpoint mais recente).
-export function suggestVolatilityRange(intervalTicks: number[], currentTick: number, fee: number): SuggestedRange {
+export function suggestVolatilityRange(
+  intervalTicks: number[],
+  currentTick: number,
+  fee: number,
+  gasCostFraction: number | null
+): SuggestedRange {
   const spacing = tickSpacingForFee(fee);
   const allTicks = [...intervalTicks, currentTick];
   const minTick = Math.min(...allTicks);
   const maxTick = Math.max(...allTicks);
   const width = maxTick - minTick;
-  const margin = width * SAFETY_MARGIN_FRACTION;
+  const marginFraction = computeMarginFraction(gasCostFraction, fee, intervalTicks);
+  const margin = width * marginFraction;
 
   let newLower = roundToSpacing(minTick - margin, spacing);
   let newUpper = roundToSpacing(maxTick + margin, spacing);
