@@ -41,7 +41,7 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
-    const reason = formatOutOfRangeReason(position);
+    const reason = formatOutOfRangeReason(position, null);
     expect(reason).toContain("0 –");
     expect(reason).toContain("∞");
     expect(reason).not.toMatch(/e\+\d\d/); // sem notação científica tipo "3.38e+50"
@@ -61,8 +61,66 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
-    const reason = formatOutOfRangeReason(position);
+    const reason = formatOutOfRangeReason(position, null);
     expect(reason).not.toMatch(/e\+\d\d/);
+  });
+
+  it("mostra o custo de gas convertido quando fornecido", () => {
+    const position: OnchainPosition = {
+      chain: "arbitrum",
+      walletAddress: "0x0000000000000000000000000000000000000004",
+      tokenId: 1n,
+      poolAddress: "0x0000000000000000000000000000000000000001",
+      fee: 3000,
+      tickLower: -6931,
+      tickUpper: 6931,
+      currentTick: 10000,
+      sqrtPriceX96: 2n ** 96n,
+      liquidity: 1_000_000_000n,
+      token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
+      token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
+    };
+    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: 1.23 });
+    expect(reason).toContain("Custo estimado de rebalance");
+    expect(reason).toContain("1.2300 USDC");
+  });
+
+  it("omite a linha de custo de gas quando costToken1 é null (par sem WETH)", () => {
+    const position: OnchainPosition = {
+      chain: "arbitrum",
+      walletAddress: "0x0000000000000000000000000000000000000004",
+      tokenId: 1n,
+      poolAddress: "0x0000000000000000000000000000000000000001",
+      fee: 3000,
+      tickLower: -6931,
+      tickUpper: 6931,
+      currentTick: 10000,
+      sqrtPriceX96: 2n ** 96n,
+      liquidity: 1_000_000_000n,
+      token0: { address: "0x0000000000000000000000000000000000000002", decimals: 6, symbol: "USDC" },
+      token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
+    };
+    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: null });
+    expect(reason).not.toContain("Custo estimado de rebalance");
+  });
+
+  it("omite a linha de custo de gas quando gasCost é null", () => {
+    const position: OnchainPosition = {
+      chain: "arbitrum",
+      walletAddress: "0x0000000000000000000000000000000000000004",
+      tokenId: 1n,
+      poolAddress: "0x0000000000000000000000000000000000000001",
+      fee: 3000,
+      tickLower: -6931,
+      tickUpper: 6931,
+      currentTick: 10000,
+      sqrtPriceX96: 2n ** 96n,
+      liquidity: 1_000_000_000n,
+      token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
+      token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
+    };
+    const reason = formatOutOfRangeReason(position, null);
+    expect(reason).not.toContain("Custo estimado de rebalance");
   });
 });
 

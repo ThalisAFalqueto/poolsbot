@@ -1,5 +1,6 @@
 import type { Address } from "viem";
 import type { ChainKey } from "../../config/chains.js";
+import type { GasCostEstimate } from "./estimate-gas-cost.js";
 
 export type TokenMeta = { address: Address; decimals: number; symbol: string };
 
@@ -32,6 +33,9 @@ export type EvaluatePositionInput = {
   position: OnchainPosition;
   state: PositionState;
   now: Date;
+  // null quando a posição está in_range (não vai ser usado) ou quando o
+  // job optou por não buscar o preço de gas nesse ciclo/chain.
+  gasCost: GasCostEstimate | null;
 };
 
 export type PositionNotification = {

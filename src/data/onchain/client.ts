@@ -18,6 +18,10 @@ export function getPublicClient(chainKey: ChainKey): PublicClient {
   return client;
 }
 
+export async function getGasPrice(chainKey: ChainKey): Promise<bigint> {
+  return getPublicClient(chainKey).getGasPrice();
+}
+
 // client.multicall usa o contrato multicall3, já pré-configurado em
 // viem/chains pras chains suportadas — nenhuma config extra necessária.
 export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address): Promise<OnchainPosition[]> {

@@ -1,5 +1,6 @@
 import { chains } from "../../config/chains.js";
 import type { ImpermanentLossResult } from "./calculate-il.js";
+import type { GasCostEstimate } from "./estimate-gas-cost.js";
 import { sqrtPriceX96ToPrice, tickToPrice } from "./price-math.js";
 import { suggestRange } from "./range-suggestion.js";
 import type { OnchainPosition, PositionNotification } from "./types.js";
@@ -57,19 +58,30 @@ function suggestedRangeLine(position: OnchainPosition): string {
 
 const CALL_TO_ACTION = "Use /positions para ver todas as suas posições.";
 
-export function formatOutOfRangeReason(position: OnchainPosition): string {
+// null quando o job não buscou o preço de gas (posição já in_range não
+// precisa) ou quando o par não envolve WETH (sem oráculo, não dá pra
+// converter — nesse caso a linha inteira é omitida, não só o valor).
+function gasCostLines(position: OnchainPosition, gasCost: GasCostEstimate | null): string[] {
+  if (!gasCost || gasCost.costToken1 === null) return [];
+  return [
+    `Custo estimado de rebalance: ~${gasCost.costToken1.toFixed(4)} ${position.token1.symbol} em gas (~${gasCost.costEth.toFixed(5)} ETH) — considere se compensa antes de agir.`,
+  ];
+}
+
+export function formatOutOfRangeReason(position: OnchainPosition, gasCost: GasCostEstimate | null): string {
   return [
     header(position),
     rangeLine(position),
     currentPriceLine(position),
     "Status: 🚨 fora da faixa — posição parada de render fees",
     suggestedRangeLine(position),
+    ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
   ].join("\n");
 }
 
-export function formatReminderReason(position: OnchainPosition, outOfRangeSince: Date | null): string {
+export function formatReminderReason(position: OnchainPosition, outOfRangeSince: Date | null, gasCost: GasCostEstimate | null): string {
   const since = outOfRangeSince ? outOfRangeSince.toLocaleString("pt-BR") : "data desconhecida";
   return [
     header(position),
@@ -77,6 +89,7 @@ export function formatReminderReason(position: OnchainPosition, outOfRangeSince:
     currentPriceLine(position),
     `Status: 🔔 continua fora da faixa desde ${since}`,
     suggestedRangeLine(position),
+    ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
   ].join("\n");
@@ -120,14 +133,24 @@ export function formatIlAlertReason(
   return kind === "recovered" ? body : `${body}\n\nUse /positions para ver detalhes.`;
 }
 
-export type FormatReasonFn = (position: OnchainPosition, kind: PositionNotification["kind"], outOfRangeSince: Date | null) => string;
+export type FormatReasonFn = (
+  position: OnchainPosition,
+  kind: PositionNotification["kind"],
+  outOfRangeSince: Date | null,
+  gasCost: GasCostEstimate | null
+) => string;
 
-export function formatReason(position: OnchainPosition, kind: PositionNotification["kind"], outOfRangeSince: Date | null): string {
+export function formatReason(
+  position: OnchainPosition,
+  kind: PositionNotification["kind"],
+  outOfRangeSince: Date | null,
+  gasCost: GasCostEstimate | null
+): string {
   switch (kind) {
     case "out_of_range":
-      return formatOutOfRangeReason(position);
+      return formatOutOfRangeReason(position, gasCost);
     case "reminder":
-      return formatReminderReason(position, outOfRangeSince);
+      return formatReminderReason(position, outOfRangeSince, gasCost);
     case "back_in_range":
       return formatBackInRangeReason(position);
   }

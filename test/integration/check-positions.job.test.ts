@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chains } from "../../src/config/chains.js";
 import { findOrCreateUserByTelegramChatId } from "../../src/persistence/repositories/users.repository.js";
 import { addWallet } from "../../src/persistence/repositories/user-wallets.repository.js";
 import { truncateAll } from "./db-helper.js";
 
 vi.mock("../../src/data/onchain/client.js", () => ({
   fetchPositionsForWallets: vi.fn(),
+  getGasPrice: vi.fn().mockResolvedValue(20_000_000_000n), // 20 gwei, placeholder
 }));
 vi.mock("../../src/notifications/dispatch-signal.js", () => ({
   dispatchSignal: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { fetchPositionsForWallets } from "../../src/data/onchain/client.js";
+import { fetchPositionsForWallets, getGasPrice } from "../../src/data/onchain/client.js";
 import { dispatchSignal } from "../../src/notifications/dispatch-signal.js";
 import { checkPositionsJob } from "../../src/scheduler/jobs/check-positions.job.js";
 
 const mockedFetch = vi.mocked(fetchPositionsForWallets);
+const mockedGasPrice = vi.mocked(getGasPrice);
 const mockedDispatch = vi.mocked(dispatchSignal);
 
 function makePosition(overrides: Record<string, unknown> = {}) {
@@ -39,6 +42,7 @@ describe("checkPositionsJob", () => {
   beforeEach(async () => {
     await truncateAll();
     mockedFetch.mockReset();
+    mockedGasPrice.mockClear();
     mockedDispatch.mockClear();
   });
 
@@ -69,6 +73,35 @@ describe("checkPositionsJob", () => {
     await checkPositionsJob(); // 2º ciclo: detecta out_of_range
 
     expect(mockedDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("ciclo sem nenhuma posição fora de range não busca preço de gas", async () => {
+    const user = await findOrCreateUserByTelegramChatId("chat-no-gas");
+    await addWallet(user.id, "0xabc");
+    mockedFetch.mockResolvedValue([{ chain: "arbitrum", positions: [makePosition({ currentTick: 0 })] }] as any);
+
+    await checkPositionsJob();
+    expect(mockedGasPrice).not.toHaveBeenCalled();
+  });
+
+  it("posição fora de range busca preço de gas e inclui o custo estimado na notificação", async () => {
+    const user = await findOrCreateUserByTelegramChatId("chat-gas");
+    await addWallet(user.id, "0xabc");
+
+    // token0 precisa ser o endereço REAL de WETH na Arbitrum — a detecção
+    // em estimate-gas-cost.ts é por endereço, não por símbolo.
+    const weth = { address: chains.arbitrum.wethAddress, decimals: 18, symbol: "WETH" };
+
+    mockedFetch.mockResolvedValue([{ chain: "arbitrum", positions: [makePosition({ currentTick: 0, token0: weth })] }] as any);
+    await checkPositionsJob(); // 1º ciclo: cria estado in_range, sem gas
+
+    mockedFetch.mockResolvedValue([{ chain: "arbitrum", positions: [makePosition({ currentTick: 1500, token0: weth })] }] as any);
+    await checkPositionsJob(); // 2º ciclo: fora de range
+
+    expect(mockedGasPrice).toHaveBeenCalledTimes(1);
+    expect(mockedDispatch).toHaveBeenCalledTimes(1);
+    const [signal] = mockedDispatch.mock.calls[0]!;
+    expect(signal.reason).toContain("Custo estimado de rebalance");
   });
 
   it("falha ao buscar posições de um usuário não impede o processamento dos outros", async () => {

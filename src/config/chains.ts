@@ -27,12 +27,17 @@ export const chains = {
     viemChain: arbitrum as Chain,
     defillamaChainName: "Arbitrum",
     uniswapV3: ARBITRUM_UNISWAP_V3,
+    // WETH nativo/canônico da chain — usado só pra converter custo de gas
+    // (sempre pago em ETH) pra token1 quando o par envolve WETH, sem
+    // precisar de oráculo de preço externo (ver estimate-gas-cost.ts).
+    wethAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
     rpcUrl: env.arbitrumRpcUrl as string | undefined,
   },
   base: {
     viemChain: base as Chain,
     defillamaChainName: "Base",
     uniswapV3: BASE_UNISWAP_V3,
+    wethAddress: "0x4200000000000000000000000000000000000006", // confirmado via teste on-chain real desta sessão
     rpcUrl: env.baseRpcUrl,
   },
 } as const;
