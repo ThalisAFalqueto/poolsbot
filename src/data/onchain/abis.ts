@@ -94,4 +94,17 @@ export const uniswapV3PoolAbi = [
       { name: "unlocked", type: "bool" },
     ],
   },
+  {
+    // Oráculo TWAP nativo do pool — dá pra pedir vários checkpoints de
+    // "segundosAtrás" numa única chamada, sem precisar de nó de arquivo
+    // nem de amostrar blocos históricos um por um.
+    type: "function",
+    name: "observe",
+    stateMutability: "view",
+    inputs: [{ name: "secondsAgos", type: "uint32[]" }],
+    outputs: [
+      { name: "tickCumulatives", type: "int56[]" },
+      { name: "secondsPerLiquidityCumulativeX128s", type: "uint160[]" },
+    ],
+  },
 ] as const;

@@ -7,17 +7,22 @@ import { truncateAll } from "./db-helper.js";
 vi.mock("../../src/data/onchain/client.js", () => ({
   fetchPositionsForWallets: vi.fn(),
   getGasPrice: vi.fn().mockResolvedValue(20_000_000_000n), // 20 gwei, placeholder
+  // null = "sem histórico suficiente" (mesmo contrato de uma chamada real
+  // que reverteu) — força os testes a caírem no heurístico de range por
+  // padrão, sem precisar simular o oráculo TWAP em cada um.
+  fetchTickCumulatives: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../../src/notifications/dispatch-signal.js", () => ({
   dispatchSignal: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { fetchPositionsForWallets, getGasPrice } from "../../src/data/onchain/client.js";
+import { fetchPositionsForWallets, fetchTickCumulatives, getGasPrice } from "../../src/data/onchain/client.js";
 import { dispatchSignal } from "../../src/notifications/dispatch-signal.js";
 import { checkPositionsJob } from "../../src/scheduler/jobs/check-positions.job.js";
 
 const mockedFetch = vi.mocked(fetchPositionsForWallets);
 const mockedGasPrice = vi.mocked(getGasPrice);
+const mockedTickCumulatives = vi.mocked(fetchTickCumulatives);
 const mockedDispatch = vi.mocked(dispatchSignal);
 
 function makePosition(overrides: Record<string, unknown> = {}) {
@@ -43,6 +48,7 @@ describe("checkPositionsJob", () => {
     await truncateAll();
     mockedFetch.mockReset();
     mockedGasPrice.mockClear();
+    mockedTickCumulatives.mockClear();
     mockedDispatch.mockClear();
   });
 
@@ -102,6 +108,26 @@ describe("checkPositionsJob", () => {
     expect(mockedDispatch).toHaveBeenCalledTimes(1);
     const [signal] = mockedDispatch.mock.calls[0]!;
     expect(signal.reason).toContain("Custo estimado de rebalance");
+  });
+
+  it("posição fora de range com histórico de preço disponível calibra a faixa por volatilidade real (não cai no heurístico)", async () => {
+    const user = await findOrCreateUserByTelegramChatId("chat-volatility");
+    await addWallet(user.id, "0xabc");
+
+    mockedFetch.mockResolvedValue([{ chain: "arbitrum", positions: [makePosition({ currentTick: 0 })] }] as any);
+    await checkPositionsJob(); // 1º ciclo: cria estado in_range
+
+    // simula o oráculo respondendo com histórico suficiente já na 1ª
+    // janela tentada (7 dias): 13 checkpoints (12 intervalos), tick médio
+    // não-degenerado em cada um.
+    mockedTickCumulatives.mockResolvedValue(Array.from({ length: 13 }, (_, i) => BigInt(i) * 1000n) as any);
+    mockedFetch.mockResolvedValue([{ chain: "arbitrum", positions: [makePosition({ currentTick: 1500 })] }] as any);
+    await checkPositionsJob(); // 2º ciclo: fora de range
+
+    expect(mockedDispatch).toHaveBeenCalledTimes(1);
+    const [signal] = mockedDispatch.mock.calls[0]!;
+    expect(signal.reason).toContain("calibrada por volatilidade real");
+    expect(signal.reason).toContain("7d");
   });
 
   it("falha ao buscar posições de um usuário não impede o processamento dos outros", async () => {

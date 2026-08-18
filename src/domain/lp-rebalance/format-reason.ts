@@ -2,8 +2,7 @@ import { chains } from "../../config/chains.js";
 import type { ImpermanentLossResult } from "./calculate-il.js";
 import type { GasCostEstimate } from "./estimate-gas-cost.js";
 import { sqrtPriceX96ToPrice, tickToPrice } from "./price-math.js";
-import { suggestRange } from "./range-suggestion.js";
-import type { OnchainPosition, PositionNotification } from "./types.js";
+import type { OnchainPosition, PositionNotification, PositionRangeSuggestion } from "./types.js";
 
 // toFixed(2) é suficiente pros pares "comuns" (ETH/USDC, WBTC/USDC etc.) mas
 // perde precisão pra pares de baixo valor unitário (ex: 0.0000001234) — fora
@@ -49,11 +48,24 @@ function currentPriceLine(position: OnchainPosition): string {
   return `Preço atual: ${formatPrice(price)} ${position.token1.symbol} por ${position.token0.symbol}`;
 }
 
-function suggestedRangeLine(position: OnchainPosition): string {
-  const suggested = suggestRange(position.currentTick, position.tickLower, position.tickUpper, position.fee);
-  const low = formatBoundaryPrice(suggested.tickLower, position.token0.decimals, position.token1.decimals);
-  const high = formatBoundaryPrice(suggested.tickUpper, position.token0.decimals, position.token1.decimals);
-  return `Faixa sugerida: ${low} – ${high} ${position.token1.symbol} por ${position.token0.symbol}`;
+function formatWindowDuration(seconds: number): string {
+  if (seconds >= 24 * 3600) return `${Math.round(seconds / (24 * 3600))}d`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+// suggestion vem sempre pronta do job (calculada em client.ts/volatility-range.ts,
+// que exigem RPC — esta função continua pura). O texto deixa explícito se a
+// faixa foi calibrada por movimento de preço real ou se caiu no heurístico
+// de espelhar a largura atual (pool sem histórico suficiente) — nunca
+// finge uma precisão que não tem.
+function suggestedRangeLine(position: OnchainPosition, suggestion: PositionRangeSuggestion): string {
+  const low = formatBoundaryPrice(suggestion.range.tickLower, position.token0.decimals, position.token1.decimals);
+  const high = formatBoundaryPrice(suggestion.range.tickUpper, position.token0.decimals, position.token1.decimals);
+  const basis =
+    suggestion.source === "volatility"
+      ? `calibrada por volatilidade real, últimos ${formatWindowDuration(suggestion.volatilityWindowSeconds!)}`
+      : "largura atual espelhada — sem histórico de preço suficiente pra calibrar";
+  return `Faixa sugerida (${basis}): ${low} – ${high} ${position.token1.symbol} por ${position.token0.symbol}`;
 }
 
 const CALL_TO_ACTION = "Use /positions para ver todas as suas posições.";
@@ -68,27 +80,36 @@ function gasCostLines(position: OnchainPosition, gasCost: GasCostEstimate | null
   ];
 }
 
-export function formatOutOfRangeReason(position: OnchainPosition, gasCost: GasCostEstimate | null): string {
+export function formatOutOfRangeReason(
+  position: OnchainPosition,
+  gasCost: GasCostEstimate | null,
+  suggestedRange: PositionRangeSuggestion
+): string {
   return [
     header(position),
     rangeLine(position),
     currentPriceLine(position),
     "Status: 🚨 fora da faixa — posição parada de render fees",
-    suggestedRangeLine(position),
+    suggestedRangeLine(position, suggestedRange),
     ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
   ].join("\n");
 }
 
-export function formatReminderReason(position: OnchainPosition, outOfRangeSince: Date | null, gasCost: GasCostEstimate | null): string {
+export function formatReminderReason(
+  position: OnchainPosition,
+  outOfRangeSince: Date | null,
+  gasCost: GasCostEstimate | null,
+  suggestedRange: PositionRangeSuggestion
+): string {
   const since = outOfRangeSince ? outOfRangeSince.toLocaleString("pt-BR") : "data desconhecida";
   return [
     header(position),
     rangeLine(position),
     currentPriceLine(position),
     `Status: 🔔 continua fora da faixa desde ${since}`,
-    suggestedRangeLine(position),
+    suggestedRangeLine(position, suggestedRange),
     ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
@@ -137,20 +158,27 @@ export type FormatReasonFn = (
   position: OnchainPosition,
   kind: PositionNotification["kind"],
   outOfRangeSince: Date | null,
-  gasCost: GasCostEstimate | null
+  gasCost: GasCostEstimate | null,
+  suggestedRange: PositionRangeSuggestion | null
 ) => string;
 
+// suggestedRange só é obrigatória de verdade pros kinds out_of_range/reminder
+// (garantido pelo job — sempre calcula algo quando a posição está fora de
+// range); back_in_range ignora. O "| null" no tipo existe porque
+// EvaluatePositionInput também usa null pra representar "posição in_range,
+// não computado" antes de saber qual kind vai sair da avaliação.
 export function formatReason(
   position: OnchainPosition,
   kind: PositionNotification["kind"],
   outOfRangeSince: Date | null,
-  gasCost: GasCostEstimate | null
+  gasCost: GasCostEstimate | null,
+  suggestedRange: PositionRangeSuggestion | null
 ): string {
   switch (kind) {
     case "out_of_range":
-      return formatOutOfRangeReason(position, gasCost);
+      return formatOutOfRangeReason(position, gasCost, suggestedRange!);
     case "reminder":
-      return formatReminderReason(position, outOfRangeSince, gasCost);
+      return formatReminderReason(position, outOfRangeSince, gasCost, suggestedRange!);
     case "back_in_range":
       return formatBackInRangeReason(position);
   }

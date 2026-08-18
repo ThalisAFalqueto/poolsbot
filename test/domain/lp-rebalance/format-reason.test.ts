@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { formatBoundaryPrice, formatIlLine, formatOutOfRangeReason } from "../../../src/domain/lp-rebalance/format-reason.js";
 import type { ImpermanentLossResult } from "../../../src/domain/lp-rebalance/calculate-il.js";
-import type { OnchainPosition } from "../../../src/domain/lp-rebalance/types.js";
+import type { OnchainPosition, PositionRangeSuggestion } from "../../../src/domain/lp-rebalance/types.js";
+
+const HEURISTIC_SUGGESTION: PositionRangeSuggestion = {
+  range: { tickLower: -1000, tickUpper: 1000 },
+  source: "heuristic",
+  volatilityWindowSeconds: null,
+};
+
+const VOLATILITY_SUGGESTION: PositionRangeSuggestion = {
+  range: { tickLower: -1200, tickUpper: 1200 },
+  source: "volatility",
+  volatilityWindowSeconds: 24 * 3600,
+};
 
 describe("formatBoundaryPrice", () => {
   it("mostra '0' pro limite inferior full-range em vez de um número astronômico", () => {
@@ -41,7 +53,7 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
-    const reason = formatOutOfRangeReason(position, null);
+    const reason = formatOutOfRangeReason(position, null, HEURISTIC_SUGGESTION);
     expect(reason).toContain("0 –");
     expect(reason).toContain("∞");
     expect(reason).not.toMatch(/e\+\d\d/); // sem notação científica tipo "3.38e+50"
@@ -61,7 +73,7 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
-    const reason = formatOutOfRangeReason(position, null);
+    const reason = formatOutOfRangeReason(position, null, HEURISTIC_SUGGESTION);
     expect(reason).not.toMatch(/e\+\d\d/);
   });
 
@@ -80,7 +92,7 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
     };
-    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: 1.23 });
+    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: 1.23 }, HEURISTIC_SUGGESTION);
     expect(reason).toContain("Custo estimado de rebalance");
     expect(reason).toContain("1.2300 USDC");
   });
@@ -100,7 +112,7 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 6, symbol: "USDC" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDT" },
     };
-    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: null });
+    const reason = formatOutOfRangeReason(position, { costEth: 0.0005, costToken1: null }, HEURISTIC_SUGGESTION);
     expect(reason).not.toContain("Custo estimado de rebalance");
   });
 
@@ -119,8 +131,34 @@ describe("formatOutOfRangeReason", () => {
       token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
       token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
     };
-    const reason = formatOutOfRangeReason(position, null);
+    const reason = formatOutOfRangeReason(position, null, HEURISTIC_SUGGESTION);
     expect(reason).not.toContain("Custo estimado de rebalance");
+  });
+
+  const BASE_POSITION: OnchainPosition = {
+    chain: "arbitrum",
+    walletAddress: "0x0000000000000000000000000000000000000004",
+    tokenId: 1n,
+    poolAddress: "0x0000000000000000000000000000000000000001",
+    fee: 3000,
+    tickLower: -6931,
+    tickUpper: 6931,
+    currentTick: 10000,
+    sqrtPriceX96: 2n ** 96n,
+    liquidity: 1_000_000_000n,
+    token0: { address: "0x0000000000000000000000000000000000000002", decimals: 18, symbol: "WETH" },
+    token1: { address: "0x0000000000000000000000000000000000000003", decimals: 6, symbol: "USDC" },
+  };
+
+  it("deixa claro quando a faixa foi calibrada por volatilidade real, com a janela usada", () => {
+    const reason = formatOutOfRangeReason(BASE_POSITION, null, VOLATILITY_SUGGESTION);
+    expect(reason).toContain("calibrada por volatilidade real");
+    expect(reason).toContain("1d"); // 24h == 1 dia inteiro, formatWindowDuration prefere dias a partir de 24h
+  });
+
+  it("deixa claro quando caiu no heurístico por falta de histórico, sem fingir precisão", () => {
+    const reason = formatOutOfRangeReason(BASE_POSITION, null, HEURISTIC_SUGGESTION);
+    expect(reason).toContain("sem histórico de preço suficiente");
   });
 });
 

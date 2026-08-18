@@ -22,7 +22,7 @@ function isSafelyInRange(currentTick: number, tickLower: number, tickUpper: numb
 const CONFIDENCE = 0.95; // dado on-chain direto, sem proxy/heurística envolvida
 
 export function evaluatePosition(input: EvaluatePositionInput): EvaluatePositionOutput {
-  const { position, state, now, gasCost } = input;
+  const { position, state, now, gasCost, suggestedRange } = input;
   const { currentTick, tickLower, tickUpper } = position;
   const inRange = isInRange(currentTick, tickLower, tickUpper);
 
@@ -34,7 +34,7 @@ export function evaluatePosition(input: EvaluatePositionInput): EvaluatePosition
       nextState,
       notification: {
         kind: "out_of_range",
-        reason: formatReason(position, "out_of_range", now, gasCost),
+        reason: formatReason(position, "out_of_range", now, gasCost, suggestedRange),
         confidence: CONFIDENCE,
       },
     };
@@ -45,7 +45,11 @@ export function evaluatePosition(input: EvaluatePositionInput): EvaluatePosition
     const nextState: PositionState = { status: "in_range", outOfRangeSince: null, lastNotifiedAt: null };
     return {
       nextState,
-      notification: { kind: "back_in_range", reason: formatReason(position, "back_in_range", null, gasCost), confidence: CONFIDENCE },
+      notification: {
+        kind: "back_in_range",
+        reason: formatReason(position, "back_in_range", null, gasCost, suggestedRange),
+        confidence: CONFIDENCE,
+      },
     };
   }
 
@@ -58,7 +62,7 @@ export function evaluatePosition(input: EvaluatePositionInput): EvaluatePosition
       nextState: { ...state, lastNotifiedAt: now },
       notification: {
         kind: "reminder",
-        reason: formatReason(position, "reminder", state.outOfRangeSince, gasCost),
+        reason: formatReason(position, "reminder", state.outOfRangeSince, gasCost, suggestedRange),
         confidence: CONFIDENCE,
       },
     };

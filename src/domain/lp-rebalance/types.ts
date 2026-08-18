@@ -29,6 +29,17 @@ export type PositionState = {
 
 export type SuggestedRange = { tickLower: number; tickUpper: number };
 
+// "volatility": calibrada por movimento de preço real observado on-chain
+// (ver domain/lp-rebalance/volatility-range.ts), com a janela usada.
+// "heuristic": caiu pro espelhamento de largura simples (range-suggestion.ts)
+// porque o pool não tinha histórico de preço suficiente pra nenhuma janela
+// tentada — sempre disponível, nunca falha.
+export type PositionRangeSuggestion = {
+  range: SuggestedRange;
+  source: "volatility" | "heuristic";
+  volatilityWindowSeconds: number | null;
+};
+
 export type EvaluatePositionInput = {
   position: OnchainPosition;
   state: PositionState;
@@ -36,6 +47,9 @@ export type EvaluatePositionInput = {
   // null quando a posição está in_range (não vai ser usado) ou quando o
   // job optou por não buscar o preço de gas nesse ciclo/chain.
   gasCost: GasCostEstimate | null;
+  // null quando a posição está in_range (não vai ser usado). Quando fora
+  // de range, o job sempre consegue calcular algo (heuristic é garantido).
+  suggestedRange: PositionRangeSuggestion | null;
 };
 
 export type PositionNotification = {

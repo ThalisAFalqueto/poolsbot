@@ -241,3 +241,27 @@ export async function fetchPositionsForWallets(
   }
   return [...positionsByChain.entries()].map(([chain, positions]) => ({ chain, positions }));
 }
+
+// Busca os checkpoints de tickCumulative do oráculo nativo do pool — 1
+// chamada de RPC pra qualquer quantidade de checkpoints (não escala com o
+// tamanho da janela de tempo, diferente de amostrar blocos históricos um
+// por um). Retorna null se o pool não tiver histórico suficiente pra essa
+// janela (observe() reverte com "OLD") — quem chama decide o que fazer
+// (tentar uma janela menor, cair pra um heurístico sem dado histórico).
+export async function fetchTickCumulatives(
+  chainKey: ChainKey,
+  poolAddress: Address,
+  secondsAgos: number[]
+): Promise<readonly bigint[] | null> {
+  try {
+    const [tickCumulatives] = await getPublicClient(chainKey).readContract({
+      address: poolAddress,
+      abi: uniswapV3PoolAbi,
+      functionName: "observe",
+      args: [secondsAgos],
+    });
+    return tickCumulatives;
+  } catch {
+    return null;
+  }
+}

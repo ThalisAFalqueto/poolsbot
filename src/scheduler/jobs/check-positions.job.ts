@@ -1,6 +1,6 @@
 import type { Address } from "viem";
 import { chains, getActiveChains, type ChainKey } from "../../config/chains.js";
-import { fetchPositionsForWallets, getGasPrice } from "../../data/onchain/client.js";
+import { fetchPositionsForWallets, fetchTickCumulatives, getGasPrice } from "../../data/onchain/client.js";
 import { calculateImpermanentLoss } from "../../domain/lp-rebalance/calculate-il.js";
 import { estimateRebalanceCost, type GasCostEstimate } from "../../domain/lp-rebalance/estimate-gas-cost.js";
 import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
@@ -8,7 +8,13 @@ import { evaluatePosition } from "../../domain/lp-rebalance/evaluate-position.js
 import { formatIlLine } from "../../domain/lp-rebalance/format-reason.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
 import { suggestRange } from "../../domain/lp-rebalance/range-suggestion.js";
-import type { OnchainPosition, PositionState } from "../../domain/lp-rebalance/types.js";
+import type { OnchainPosition, PositionRangeSuggestion, PositionState } from "../../domain/lp-rebalance/types.js";
+import {
+  buildSecondsAgos,
+  intervalAverageTicks,
+  suggestVolatilityRange,
+  VOLATILITY_WINDOWS,
+} from "../../domain/lp-rebalance/volatility-range.js";
 import type { Signal } from "../../domain/signals/types.js";
 import { executeSignal } from "../../execution/noop-executor.js";
 import { dispatchSignal } from "../../notifications/dispatch-signal.js";
@@ -66,6 +72,29 @@ async function estimateGasCostIfOutOfRange(
   return estimateRebalanceCost(gasPriceWei, position, chains[position.chain].wethAddress, currentPrice);
 }
 
+// Tenta a cascata de janelas (7d -> 24h -> 6h) via oráculo nativo do pool
+// (1 chamada de RPC por tentativa, independente da janela) — usa a
+// primeira que tiver histórico suficiente. Se nenhuma tiver (pool novo ou
+// pouco usado), cai pro heurístico de espelhar a largura atual, que nunca
+// falha (sem RPC). Só roda quando a posição está fora de range — em
+// range, o resultado nunca é usado.
+async function suggestRangeIfOutOfRange(position: OnchainPosition): Promise<PositionRangeSuggestion | null> {
+  if (isInRange(position.currentTick, position.tickLower, position.tickUpper)) return null;
+
+  for (const { windowSeconds, checkpointCount } of VOLATILITY_WINDOWS) {
+    const secondsAgos = buildSecondsAgos(windowSeconds, checkpointCount);
+    const tickCumulatives = await fetchTickCumulatives(position.chain, position.poolAddress, secondsAgos);
+    if (tickCumulatives) {
+      const intervalTicks = intervalAverageTicks(tickCumulatives, secondsAgos);
+      const range = suggestVolatilityRange(intervalTicks, position.currentTick, position.fee);
+      return { range, source: "volatility", volatilityWindowSeconds: windowSeconds };
+    }
+  }
+
+  const range = suggestRange(position.currentTick, position.tickLower, position.tickUpper, position.fee);
+  return { range, source: "heuristic", volatilityWindowSeconds: null };
+}
+
 export async function checkPositionsJob(): Promise<string> {
   const rows = await listUserWallets();
   if (rows.length === 0) return "nenhuma wallet vinculada.";
@@ -121,7 +150,8 @@ export async function checkPositionsJob(): Promise<string> {
             : await getPositionState(record.id);
 
           const gasCost = await estimateGasCostIfOutOfRange(gasPriceCache, position);
-          const { nextState, notification } = evaluatePosition({ position, state, now, gasCost });
+          const suggestedRange = await suggestRangeIfOutOfRange(position);
+          const { nextState, notification } = evaluatePosition({ position, state, now, gasCost, suggestedRange });
           await updatePositionState(record.id, nextState);
 
           // syncIlBaseline e o cálculo de IL rodam pra TODA posição, não só
@@ -148,14 +178,15 @@ export async function checkPositionsJob(): Promise<string> {
           if (notification) {
             const reasonWithIl = `${notification.reason}\n\n${formatIlLine(il, baseline.wasReset, position.token1.symbol)}`;
 
+            // suggestedRange já foi calculado acima (mesma condição
+            // !isInRange que gerou este notification) — reusa em vez de
+            // recalcular, pra não duplicar RPC nem arriscar inconsistência
+            // entre o texto da notificação e os params estruturados do Signal.
             const suggestedAction: Signal["suggestedAction"] =
-              notification.kind === "out_of_range" || notification.kind === "reminder"
+              (notification.kind === "out_of_range" || notification.kind === "reminder") && suggestedRange
                 ? {
                     kind: "move_range",
-                    params: (() => {
-                      const suggested = suggestRange(position.currentTick, position.tickLower, position.tickUpper, position.fee);
-                      return { newTickLower: suggested.tickLower, newTickUpper: suggested.tickUpper };
-                    })(),
+                    params: { newTickLower: suggestedRange.range.tickLower, newTickUpper: suggestedRange.range.tickUpper },
                   }
                 : { kind: "none" };
 

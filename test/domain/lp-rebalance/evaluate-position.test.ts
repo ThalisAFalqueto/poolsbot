@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { evaluatePosition } from "../../../src/domain/lp-rebalance/evaluate-position.js";
-import type { OnchainPosition, PositionState } from "../../../src/domain/lp-rebalance/types.js";
+import type { OnchainPosition, PositionRangeSuggestion, PositionState } from "../../../src/domain/lp-rebalance/types.js";
 
 const NOW = new Date("2026-08-15T12:00:00Z");
+
+// Necessário sempre que o teste espera uma notificação out_of_range/reminder
+// (format-reason.ts assume não-nulo nesses casos — null só é válido quando
+// a posição está in_range e nenhuma notificação vai ser gerada).
+const HEURISTIC_SUGGESTION: PositionRangeSuggestion = {
+  range: { tickLower: -1000, tickUpper: 1000 },
+  source: "heuristic",
+  volatilityWindowSeconds: null,
+};
 
 function makePosition(overrides: Partial<OnchainPosition> = {}): OnchainPosition {
   return {
@@ -26,14 +35,20 @@ const IN_RANGE_STATE: PositionState = { status: "in_range", outOfRangeSince: nul
 describe("evaluatePosition", () => {
   it("in_range -> in_range sem notificação quando o tick continua dentro", () => {
     const position = makePosition({ currentTick: 1500 });
-    const { nextState, notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost: null });
+    const { nextState, notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost: null, suggestedRange: null });
     expect(nextState.status).toBe("in_range");
     expect(notification).toBeNull();
   });
 
   it("in_range -> out_of_range assim que o tick sai (edge-triggered, sem margem)", () => {
     const position = makePosition({ currentTick: 2000 }); // >= tickUpper
-    const { nextState, notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost: null });
+    const { nextState, notification } = evaluatePosition({
+      position,
+      state: IN_RANGE_STATE,
+      now: NOW,
+      gasCost: null,
+      suggestedRange: HEURISTIC_SUGGESTION,
+    });
     expect(nextState.status).toBe("out_of_range");
     expect(nextState.outOfRangeSince).toEqual(NOW);
     expect(nextState.lastNotifiedAt).toEqual(NOW);
@@ -45,7 +60,7 @@ describe("evaluatePosition", () => {
     const outOfRangeSince = new Date(NOW.getTime() - 2 * 3600 * 1000);
     const state: PositionState = { status: "out_of_range", outOfRangeSince, lastNotifiedAt: outOfRangeSince };
     const position = makePosition({ currentTick: 2100 }); // ainda fora, 2h desde o aviso (<6h)
-    const { nextState, notification } = evaluatePosition({ position, state, now: NOW, gasCost: null });
+    const { nextState, notification } = evaluatePosition({ position, state, now: NOW, gasCost: null, suggestedRange: null });
     expect(nextState.status).toBe("out_of_range");
     expect(notification).toBeNull();
     expect(nextState.lastNotifiedAt).toEqual(outOfRangeSince);
@@ -55,7 +70,13 @@ describe("evaluatePosition", () => {
     const outOfRangeSince = new Date(NOW.getTime() - 7 * 3600 * 1000);
     const state: PositionState = { status: "out_of_range", outOfRangeSince, lastNotifiedAt: outOfRangeSince };
     const position = makePosition({ currentTick: 2100 });
-    const { nextState, notification } = evaluatePosition({ position, state, now: NOW, gasCost: null });
+    const { nextState, notification } = evaluatePosition({
+      position,
+      state,
+      now: NOW,
+      gasCost: null,
+      suggestedRange: HEURISTIC_SUGGESTION,
+    });
     expect(nextState.status).toBe("out_of_range");
     expect(notification?.kind).toBe("reminder");
     expect(nextState.lastNotifiedAt).toEqual(NOW);
@@ -67,11 +88,11 @@ describe("evaluatePosition", () => {
 
     // margem = 10% de 1000 = 100. tick 1050: dentro do range (>=1000,<2000) mas
     // ainda na zona de margem (1000+100=1100), não conta como "seguro" ainda.
-    const stillFlagged = evaluatePosition({ position: makePosition({ currentTick: 1050 }), state, now: NOW, gasCost: null });
+    const stillFlagged = evaluatePosition({ position: makePosition({ currentTick: 1050 }), state, now: NOW, gasCost: null, suggestedRange: null });
     expect(stillFlagged.nextState.status).toBe("out_of_range");
 
     // tick 1150: além da margem de segurança, recupera de verdade.
-    const recovered = evaluatePosition({ position: makePosition({ currentTick: 1150 }), state, now: NOW, gasCost: null });
+    const recovered = evaluatePosition({ position: makePosition({ currentTick: 1150 }), state, now: NOW, gasCost: null, suggestedRange: null });
     expect(recovered.nextState.status).toBe("in_range");
     expect(recovered.notification?.kind).toBe("back_in_range");
     expect(recovered.nextState.outOfRangeSince).toBeNull();
@@ -80,7 +101,7 @@ describe("evaluatePosition", () => {
   it("gasCost, quando fornecido, aparece na reason da notificação out_of_range", () => {
     const position = makePosition({ currentTick: 2000 });
     const gasCost = { costEth: 0.001, costToken1: 2.5 };
-    const { notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost });
+    const { notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost, suggestedRange: HEURISTIC_SUGGESTION });
     expect(notification?.reason).toContain("Custo estimado de rebalance");
   });
 });
