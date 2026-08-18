@@ -1,5 +1,6 @@
 import type { CommandContext, Context } from "grammy";
 import { fetchAllPools } from "../../data/defillama/client.js";
+import { isEligiblePool, MAX_APY_VS_MEAN30D_RATIO, MIN_TVL_USD } from "../../domain/yield-optimizer/eligibility.js";
 import { rankByRiskAdjustedYield } from "../../domain/yield-optimizer/score.js";
 
 // ~3%/mês (juros compostos ao longo de um ano) é a meta declarada — usado
@@ -55,8 +56,8 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
     return;
   }
 
-  const ranked = rankByRiskAdjustedYield(
-    filtered.map((p) => ({
+  const eligible = filtered
+    .map((p) => ({
       poolId: p.pool,
       chain: p.chain,
       project: p.project,
@@ -67,7 +68,19 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
       sigma: p.sigma,
       apyMean30d: p.apyMean30d,
     }))
-  ).slice(0, 5);
+    .filter(isEligiblePool);
+
+  if (eligible.length === 0) {
+    await ctx.reply(
+      [
+        `Nenhum pool passou nos filtros de segurança (TVL ≥ $${MIN_TVL_USD.toLocaleString("pt-BR")} e APY não mais que ${MAX_APY_VS_MEAN30D_RATIO}x a própria média de 30 dias).`,
+        "Esses filtros protegem contra pools fáceis de manipular e picos de APY inflados — não são ajustáveis via --min (que só controla o piso de retorno).",
+      ].join("\n")
+    );
+    return;
+  }
+
+  const ranked = rankByRiskAdjustedYield(eligible).slice(0, 5);
 
   const lines = ranked.map(
     (p, i) =>
@@ -81,6 +94,7 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
       "",
       "Score = APY × liquidez (TVL) × risco de IL × estabilidade (volatilidade) × consistência (vs. média de 30d). Use /pool <id> para o detalhamento de cada pool.",
       `Piso de APY ajustável com --min <valor> (ex: /yield ${chain} --min 10).`,
+      `Filtros de segurança fixos (não ajustáveis): TVL ≥ $${MIN_TVL_USD.toLocaleString("pt-BR")} e APY ≤ ${MAX_APY_VS_MEAN30D_RATIO}x a média de 30d.`,
     ].join("\n")
   );
 }
