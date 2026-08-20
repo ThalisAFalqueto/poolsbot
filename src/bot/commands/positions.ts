@@ -35,7 +35,19 @@ const PNL_DISCLAIMER =
 // posições (silenciosamente omitir uma que esteja fora de range seria um
 // problema real, não só estético), a lista inteira é paginada em várias
 // mensagens quando não cabe numa só.
-const MAX_MESSAGE_CHARS = 3500;
+//
+// Este número NÃO é o limite bruto do Telegram — chunkLines só bounda o
+// tamanho dos BLOCOS de posição, mas cabeçalho + resumo do portfólio (só na
+// 1ª página) + PNL_DISCLAIMER (227 caracteres, só na última) são colados
+// DEPOIS da divisão em páginas, sem entrar nessa conta. Bug real encontrado
+// em produção (20/08/2026): com poucas posições mas de MOEDAS DE COTAÇÃO
+// diferentes (resumo cresce, 1 linha por moeda), o colchão de 4096-3500=596
+// não bastou e o Telegram rejeitou com "message is too long" — não era
+// sobre volume de posições, era sobre o resumo ter ficado maior que o
+// colchão reservado. 3200 deixa ~900 de colchão (cabeçalho ~60 +
+// disclaimer 227 + até ~600 pro resumo, generoso pra qualquer portfólio
+// realista).
+const MAX_MESSAGE_CHARS = 3200;
 
 // 4 casas decimais pros amounts de token (formatPrice usa 2, que zeraria
 // quantidades pequenas de WETH); os VALORES em token1 continuam com 2 casas.
