@@ -18,7 +18,7 @@ describe("alert-rules.repository", () => {
     await watchPool(user.id, "pool-abc", "Arbitrum");
 
     const rules = await listActiveRulesWithContext();
-    expect(rules).toHaveLength(2);
+    expect(rules).toHaveLength(3); // apy_drop_relative, tvl_drop_relative, volume_spike_relative
     expect(rules[0]?.telegramChatId).toBe("chat-1");
     expect(rules[0]?.poolId).toBe("pool-abc");
     expect(rules[0]?.status).toBe("ok");
@@ -31,7 +31,7 @@ describe("alert-rules.repository", () => {
     await watchPool(userB.id, "pool-b", "Arbitrum");
 
     const rulesA = await listRulesForUser(userA.id);
-    expect(rulesA).toHaveLength(2);
+    expect(rulesA).toHaveLength(3);
     expect(rulesA.every((r) => r.poolId === "pool-a")).toBe(true);
   });
 
@@ -44,7 +44,7 @@ describe("alert-rules.repository", () => {
     expect(removed).toBe(true);
 
     const remaining = await listRulesForUser(user.id);
-    expect(remaining).toHaveLength(1);
+    expect(remaining).toHaveLength(2);
   });
 
   it("deleteRuleForUser retorna false pra regra de outro usuário (ownership check)", async () => {
@@ -57,6 +57,6 @@ describe("alert-rules.repository", () => {
     expect(removed).toBe(false);
 
     const stillThere = await listRulesForUser(owner.id);
-    expect(stillThere).toHaveLength(2);
+    expect(stillThere).toHaveLength(3);
   });
 });

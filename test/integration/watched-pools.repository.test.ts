@@ -14,16 +14,17 @@ describe("watched-pools.repository", () => {
     await truncateAll();
   });
 
-  it("watchPool cria a posição observada + 2 regras default + estado inicial", async () => {
+  it("watchPool cria a posição observada + regras default + estado inicial", async () => {
     const user = await findOrCreateUserByTelegramChatId("chat-1");
     const { isNew } = await watchPool(user.id, "pool-abc", "Arbitrum");
     expect(isNew).toBe(true);
 
+    // DEFAULT_ALERT_RULES: apy_drop_relative, tvl_drop_relative, volume_spike_relative
     const rules = await db.execute<{ count: string }>(sql`SELECT count(*) FROM alert_rules`);
-    expect(Number(rules.rows[0]?.count)).toBe(2);
+    expect(Number(rules.rows[0]?.count)).toBe(3);
 
     const states = await db.execute<{ count: string }>(sql`SELECT count(*) FROM alert_state`);
-    expect(Number(states.rows[0]?.count)).toBe(2);
+    expect(Number(states.rows[0]?.count)).toBe(3);
   });
 
   it("watchPool é idempotente: segunda chamada não duplica nem cria novas regras", async () => {
@@ -35,7 +36,7 @@ describe("watched-pools.repository", () => {
     const watched = await db.execute<{ count: string }>(sql`SELECT count(*) FROM watched_pools`);
     expect(Number(watched.rows[0]?.count)).toBe(1);
     const rules = await db.execute<{ count: string }>(sql`SELECT count(*) FROM alert_rules`);
-    expect(Number(rules.rows[0]?.count)).toBe(2);
+    expect(Number(rules.rows[0]?.count)).toBe(3);
   });
 
   it("listDistinctWatchedPools dedupa quando dois usuários observam o mesmo pool", async () => {

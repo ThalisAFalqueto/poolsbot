@@ -4,7 +4,8 @@ export type AlertMetric =
   | "tvl_drop_relative"
   | "tvl_below_absolute"
   | "reward_apy_ending"
-  | "il_risk_proxy";
+  | "il_risk_proxy"
+  | "volume_spike_relative";
 
 export type PoolSnapshot = {
   apy: number;
@@ -13,6 +14,7 @@ export type PoolSnapshot = {
   tvlUsd: number;
   ilRisk: string | null;
   il7d: number | null;
+  volumeUsd: number | null;
   recordedAt: Date;
 };
 

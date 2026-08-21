@@ -63,12 +63,30 @@ function evaluateCondition(
       const v = Math.abs(current.il7d);
       return { triggered: v >= t, recovered: v <= t - h, value: v };
     }
+    case "volume_spike_relative": {
+      // Sinal de pico de volume (padrão citado na pesquisa de wash
+      // trading: +500% dia-sobre-dia) — mas SEM o segundo fator do paper
+      // original (variação de preço <5%), porque PoolSnapshot não carrega
+      // dado de preço. Ou seja: isso sinaliza "pico notável", não confirma
+      // manipulação — um evento de mercado real (ex: short squeeze) dispara
+      // igual. Texto da notificação deixa essa limitação explícita.
+      if (!baseline || typeof baseline.volumeUsd !== "number" || baseline.volumeUsd <= 0 || typeof current.volumeUsd !== "number") {
+        return null;
+      }
+      const spike = (current.volumeUsd - baseline.volumeUsd) / baseline.volumeUsd;
+      return { triggered: spike >= t, recovered: spike <= t - h, value: spike };
+    }
   }
 }
 
 function confidenceFor(rule: AlertRuleConfig, current: PoolSnapshot): number {
   if (rule.metric === "reward_apy_ending") return 0.75;
   if (rule.metric === "il_risk_proxy") return current.il7d === null ? 0.4 : 0.6;
+  // Pico de volume é dado real e direto, mas sem confirmar se é
+  // manipulação ou evento de mercado genuíno (falta o fator de preço do
+  // paper original) — confidence intermediária, nem 0.9 (dado direto sem
+  // ambiguidade) nem 0.4-0.6 (proxy fraco).
+  if (rule.metric === "volume_spike_relative") return 0.7;
   return 0.9;
 }
 

@@ -11,6 +11,7 @@ const METRIC_LABEL: Record<AlertMetric, string> = {
   tvl_below_absolute: "TVL abaixo de",
   reward_apy_ending: "Fim de incentivo (reward APY)",
   il_risk_proxy: "Risco de impermanent loss",
+  volume_spike_relative: "Pico de volume (possível wash trading)",
 };
 
 function formatThreshold(metric: AlertMetric, thresholdValue: number): string {

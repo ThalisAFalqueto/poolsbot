@@ -35,6 +35,7 @@ export async function ingestPoolsJob(): Promise<string> {
       tvlUsd: pool.tvlUsd,
       ilRisk: pool.ilRisk,
       il7d: pool.il7d,
+      volumeUsd: pool.volumeUsd1d,
     });
     // volumeUsd1d já vem de graça na mesma resposta — sem chamada de API
     // extra. Ausente/null em pools que não são DEX (ex: staking), omitido

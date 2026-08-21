@@ -23,6 +23,7 @@ function makeSnapshot(overrides: Partial<PoolSnapshot> = {}): PoolSnapshot {
     tvlUsd: 1_000_000,
     ilRisk: "no",
     il7d: null,
+    volumeUsd: null,
     recordedAt: NOW,
     ...overrides,
   };
@@ -146,5 +147,49 @@ describe("evaluateRule — il_risk_proxy", () => {
     const { nextState, notification } = evaluateRule({ rule, state: OK_STATE, current, baseline: null, now: NOW });
     expect(nextState.status).toBe("triggered");
     expect(notification?.confidence).toBe(0.6);
+  });
+});
+
+describe("evaluateRule — volume_spike_relative", () => {
+  it("não dispara com pico abaixo do threshold", () => {
+    const rule = makeRule({ metric: "volume_spike_relative", thresholdValue: 5.0, windowHours: 24 });
+    const baseline = makeSnapshot({ volumeUsd: 1_000_000 });
+    const current = makeSnapshot({ volumeUsd: 3_000_000 }); // +200%, abaixo de +500%
+    const { nextState, notification } = evaluateRule({ rule, state: OK_STATE, current, baseline, now: NOW });
+    expect(nextState.status).toBe("ok");
+    expect(notification).toBeNull();
+  });
+
+  it("dispara com pico >= threshold", () => {
+    const rule = makeRule({ metric: "volume_spike_relative", thresholdValue: 5.0, windowHours: 24 });
+    // +504% — cruza o threshold de +500%. O pico real achado na sessão
+    // (WBTC/USDC Arbitrum, 18->19/08: $3,3M -> $16,4M) foi ~+396%, NÃO
+    // cruzaria esse threshold — valor aqui é sintético de propósito, só
+    // pra exercitar o caminho "triggered".
+    const baseline = makeSnapshot({ volumeUsd: 3_312_671 });
+    const current = makeSnapshot({ volumeUsd: 20_000_000 });
+    const { nextState, notification } = evaluateRule({ rule, state: OK_STATE, current, baseline, now: NOW });
+    expect(nextState.status).toBe("triggered");
+    expect(notification?.reason).toContain("Volume disparou");
+    expect(notification?.confidence).toBe(0.7);
+  });
+
+  it("baseline sem volume (dado insuficiente) não dispara nem muda o estado", () => {
+    const rule = makeRule({ metric: "volume_spike_relative", thresholdValue: 5.0, windowHours: 24 });
+    const baseline = makeSnapshot({ volumeUsd: null });
+    const current = makeSnapshot({ volumeUsd: 20_000_000 });
+    const { nextState, notification } = evaluateRule({ rule, state: OK_STATE, current, baseline, now: NOW });
+    expect(nextState).toEqual(OK_STATE);
+    expect(notification).toBeNull();
+  });
+
+  it("recupera quando o volume normaliza abaixo da margem de histerese", () => {
+    const rule = makeRule({ metric: "volume_spike_relative", thresholdValue: 5.0, windowHours: 24 });
+    const triggeredAt = new Date(NOW.getTime() - 3600 * 1000);
+    const state: AlertRuleState = { status: "triggered", lastValue: 5.5, triggeredAt, lastNotifiedAt: triggeredAt };
+    const baseline = makeSnapshot({ volumeUsd: 1_000_000 });
+    const recovered = evaluateRule({ rule, state, current: makeSnapshot({ volumeUsd: 1_200_000 }), baseline, now: NOW }); // +20%
+    expect(recovered.nextState.status).toBe("ok");
+    expect(recovered.notification?.kind).toBe("recovered");
   });
 });

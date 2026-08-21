@@ -12,6 +12,7 @@ export type ApyHistoryRow = {
   tvlUsd: number;
   ilRisk: string | null;
   il7d: number | null;
+  volumeUsd: number | null;
 };
 
 export async function insertSnapshots(rows: ApyHistoryRow[]): Promise<void> {
@@ -42,6 +43,7 @@ export async function getHistorySince(
       tvlUsd: row.tvlUsd,
       ilRisk: row.ilRisk,
       il7d: row.il7d,
+      volumeUsd: row.volumeUsd,
       recordedAt: row.recordedAt,
     };
     const list = result.get(row.poolId);

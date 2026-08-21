@@ -46,5 +46,11 @@ export function formatReason(
       }
       return `${prefix} Impermanent loss estimado em ${Math.abs(current.il7d).toFixed(2)}% nos últimos 7d (estimativa da DefiLlama, não é cálculo próprio).`;
     }
+    case "volume_spike_relative": {
+      const baselineVolume = baseline?.volumeUsd ?? null;
+      const currentVolume = current.volumeUsd ?? 0;
+      const spike = baselineVolume ? (currentVolume - baselineVolume) / baselineVolume : 0;
+      return `${prefix} Volume disparou ${pct(spike)} em ${rule.windowHours}h ($${baselineVolume?.toLocaleString("pt-BR") ?? "?"} → $${currentVolume.toLocaleString("pt-BR")}). Pode ser wash trading OU um evento de mercado real (ex: alta forte de preço) — não distingue os dois, investigar antes de assumir manipulação.`;
+    }
   }
 }

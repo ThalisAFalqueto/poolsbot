@@ -67,6 +67,7 @@ export const alertMetricEnum = pgEnum("alert_metric", [
   "tvl_below_absolute",
   "reward_apy_ending",
   "il_risk_proxy",
+  "volume_spike_relative",
 ]);
 
 export const alertStatusEnum = pgEnum("alert_status", ["ok", "triggered"]);
@@ -126,6 +127,12 @@ export const apyHistory = pgTable(
     tvlUsd: doublePrecision("tvl_usd").notNull(),
     ilRisk: text("il_risk"), // passthrough categórico da DefiLlama ('yes'|'no')
     il7d: doublePrecision("il7d"), // passthrough numérico da DefiLlama, geralmente null
+    // volumeUsd1d da DefiLlama, já buscado de graça na mesma chamada que
+    // abastece o resto da linha — usado pelo alerta volume_spike_relative
+    // (reusa o mesmo mecanismo de baseline windowHours/findClosestBefore
+    // já existente pros outros metrics, em vez de inventar um caminho
+    // novo). Null em pools que não são DEX (ex: staking).
+    volumeUsd: doublePrecision("volume_usd"),
     recordedAt: timestamp("recorded_at").notNull().defaultNow(),
   },
   (table) => ({
