@@ -7,6 +7,7 @@ import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../doma
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
 import { formatBoundaryPrice, formatPrice } from "../../domain/lp-rebalance/format-reason.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
+import { isStablecoinSymbol } from "../../domain/lp-rebalance/stablecoins.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
 import { listWallets } from "../../persistence/repositories/user-wallets.repository.js";
@@ -63,18 +64,58 @@ function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-function formatAprLine(apr: AprResult | null): string {
-  if (!apr) return "APR realizado: indisponível (fees desconhecidas)";
+// Genérica pra reaproveitar entre APR total (fees+preço) e APR só-de-taxas
+// (equivalente ao "fee APR" que ferramentas tipo Revert Finance mostram
+// separado do "total APR" — a diferença entre os dois é o efeito do IL).
+function formatAprLine(apr: AprResult | null, label: string): string {
+  if (!apr) return `${label}: indisponível (fees desconhecidas)`;
   if (apr.unreliableReason === "too_new") {
     const hours = Math.max(0, Math.round(apr.elapsedDays * 24));
-    return `APR realizado: cedo demais pra estimar (observando há ${hours}h)`;
+    return `${label}: cedo demais pra estimar (observando há ${hours}h)`;
   }
   if (apr.unreliableReason === "implausible") {
-    return "APR realizado: não confiável (posição com valor de entrada residual)";
+    return `${label}: não confiável (posição com valor de entrada residual)`;
   }
   const monthlyPct = (apr.monthlyEquivalentPct * 100).toFixed(1);
   const annualPct = (apr.annualizedPct * 100).toFixed(1);
-  return `APR realizado: ${apr.monthlyEquivalentPct >= 0 ? "+" : ""}${monthlyPct}%/mês (${apr.annualizedPct >= 0 ? "+" : ""}${annualPct}%/ano)`;
+  return `${label}: ${apr.monthlyEquivalentPct >= 0 ? "+" : ""}${monthlyPct}%/mês (${apr.annualizedPct >= 0 ? "+" : ""}${annualPct}%/ano)`;
+}
+
+// "ROI" no sentido que ferramentas tipo Revert Finance usam: retorno
+// CUMULATIVO em taxas desde a entrada, sem anualizar (diferente do "fee
+// APR" acima, que já é anualizado/mensalizado) — só faz sentido mostrar
+// quando o cálculo é confiável (senão simpleReturnPct vem zerado por
+// construção, ver calculate-apr.ts).
+function formatFeeAprLine(feeApr: AprResult | null): string {
+  const aprLine = formatAprLine(feeApr, "Rentabilidade em taxas");
+  if (!feeApr?.reliable) return aprLine;
+  const roiPct = (feeApr.simpleReturnPct * 100).toFixed(2);
+  return `${aprLine} · ROI acumulado em taxas: ${feeApr.simpleReturnPct >= 0 ? "+" : ""}${roiPct}%`;
+}
+
+// Comparação explícita contra "só ter segurado" a composição de entrada —
+// o dado (hodlValueToken1/ilToken1) já existia em calculate-pnl.ts, só não
+// era exibido como linha própria. vsHold = ilToken1 + feesValueToken1: se
+// as fees coletadas superam o IL (divergence loss), o resultado é positivo
+// (mesma lógica que Revert Finance anota como "Total Fee > Div. Loss =
+// Lucro"). "≈ USD" só aparece quando token1 É uma stablecoin reconhecida —
+// não uma conversão via oráculo, que o projeto deliberadamente não usa.
+function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
+  if (!pnl) return "vs HOLD: indisponível (fees desconhecidas)";
+  const vsHold = pnl.ilToken1 + pnl.feesValueToken1;
+  const vsHoldPct = pnl.entryValueToken1 > 0 ? (vsHold / pnl.entryValueToken1) * 100 : null;
+  const pctText = vsHoldPct !== null ? ` (${vsHoldPct >= 0 ? "+" : ""}${vsHoldPct.toFixed(2)}%)` : "";
+  const usdNote = isStablecoinSymbol(token1Symbol) ? " ≈ USD" : "";
+  return `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol}${usdNote} · LP vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`;
+}
+
+function formatAgeLine(apr: AprResult | null): string {
+  if (!apr) return "Idade: indisponível";
+  if (apr.elapsedDays < 1) {
+    const hours = Math.max(0, Math.round(apr.elapsedDays * 24));
+    return `Idade: ${hours}h`;
+  }
+  return `Idade: ${apr.elapsedDays.toFixed(1)} dias`;
 }
 
 function buildPositionBlock(
@@ -84,7 +125,8 @@ function buildPositionBlock(
   fees: FeesAmounts | null,
   wasReset: boolean,
   walletLabel: string | null,
-  apr: AprResult | null
+  apr: AprResult | null,
+  feeApr: AprResult | null
 ): string {
   const inRange = isInRange(p.currentTick, p.tickLower, p.tickUpper);
   const low = formatBoundaryPrice(p.tickLower, p.token0.decimals, p.token1.decimals);
@@ -110,9 +152,22 @@ function buildPositionBlock(
     ? `Movimento de preço: ${pnl.priceMovementToken1 >= 0 ? "+" : ""}${formatPrice(pnl.priceMovementToken1)} ${p.token1.symbol} · IL: ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
     : `IL: ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
 
-  const aprLine = formatAprLine(apr);
+  const holdLine = formatHoldLine(pnl, p.token1.symbol);
+  const aprLine = formatAprLine(apr, "APR realizado");
+  const feeAprLine = formatFeeAprLine(feeApr);
+  const ageLine = formatAgeLine(apr);
 
-  return [headerLine, `   ${entryLine}`, `   ${currentLine}`, `   ${feesLine}`, `   ${summaryLine}`, `   ${aprLine}`].join("\n");
+  return [
+    headerLine,
+    `   ${entryLine}`,
+    `   ${currentLine}`,
+    `   ${feesLine}`,
+    `   ${summaryLine}`,
+    `   ${holdLine}`,
+    `   ${aprLine}`,
+    `   ${feeAprLine}`,
+    `   ${ageLine}`,
+  ].join("\n");
 }
 
 type SummaryEntry = {
@@ -325,6 +380,13 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
       const apr = pnl
         ? calculateRealizedApr({ entryValueToken1: pnl.entryValueToken1, totalPnlToken1: pnl.totalPnlToken1, since: il.since, now })
         : null;
+      // Mesma função, só trocando o P&L de entrada — isola o retorno SÓ de
+      // taxas (equivalente ao "fee APR" que ferramentas tipo Revert Finance
+      // mostram separado do "total APR", já que o total é puxado pra baixo
+      // pelo IL).
+      const feeApr = pnl
+        ? calculateRealizedApr({ entryValueToken1: pnl.entryValueToken1, totalPnlToken1: pnl.feesValueToken1, since: il.since, now })
+        : null;
 
       const summaryEntry: SummaryEntry | null = pnl
         ? {
@@ -340,7 +402,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
 
       const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
       return {
-        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr),
+        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr, feeApr),
         walletAddress: p.walletAddress,
         summaryEntry,
       };

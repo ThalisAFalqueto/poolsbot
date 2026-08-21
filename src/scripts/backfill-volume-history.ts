@@ -13,6 +13,7 @@ import { chainKeyFromDefillamaName, type ChainKey } from "../config/chains.js";
 import { env } from "../config/env.js";
 import { getPoolById, parseFeeTierLabel } from "../data/defillama/client.js";
 import { getPoolInfo } from "../data/onchain/client.js";
+import { STABLECOIN_SYMBOLS } from "../domain/lp-rebalance/stablecoins.js";
 import { db } from "../persistence/db.js";
 import { poolVolumeHistory } from "../persistence/schema/index.js";
 
@@ -28,8 +29,6 @@ const DUNE_API_BASE = "https://api.dune.com/api/v1";
 const SWAP_TABLE_BY_CHAIN: Partial<Record<ChainKey, string>> = {
   arbitrum: "uniswap_v3_arbitrum.Pair_evt_Swap",
 };
-
-const STABLECOIN_SYMBOLS = new Set(["USDC", "USDT", "DAI", "USD₮0", "BUSD", "USDC.e"]);
 
 type DuneRow = { evt_block_date: string; volume: number };
 
