@@ -33,17 +33,39 @@ type YieldsResponse = {
 let cache: { pools: DefiLlamaPool[]; fetchedAt: number } | null = null;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+async function fetchYields(url: string): Promise<YieldsResponse> {
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`DefiLlama request failed: ${res.status} ${res.statusText}`);
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as YieldsResponse;
+  } catch {
+    throw new Error(`DefiLlama resposta não é JSON válido: "${text.slice(0, 100)}"`);
+  }
+}
+
 export async function fetchAllPools(): Promise<DefiLlamaPool[]> {
   if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
     return cache.pools;
   }
 
-  const res = await fetch(YIELDS_ENDPOINT);
-  if (!res.ok) {
-    throw new Error(`DefiLlama request failed: ${res.status} ${res.statusText}`);
+  let json: YieldsResponse;
+  try {
+    json = await fetchYields(YIELDS_ENDPOINT);
+  } catch (err) {
+    // Visto ao vivo em 21/08/2026: o Cloudflare na frente da DefiLlama às
+    // vezes serve, com status 200, um corpo cacheado indevidamente (o texto
+    // literal "GET,HEAD" — parece ser um corpo de erro 405 armazenado por
+    // engano) pra URL exata sem query string. Um cache-buster na query
+    // evita esse cache específico — confirmado manualmente antes de
+    // escrever isso, funciona de forma consistente. Só 1 retry: se falhar
+    // de novo, é outro problema, deixa propagar.
+    console.error("[defillama] 1ª tentativa falhou, tentando de novo com cache-buster:", err);
+    json = await fetchYields(`${YIELDS_ENDPOINT}?_cb=${Date.now()}`);
   }
 
-  const json = (await res.json()) as YieldsResponse;
   cache = { pools: json.data, fetchedAt: Date.now() };
   return json.data;
 }
@@ -68,6 +90,33 @@ const FEE_TIER_BY_LABEL: Record<string, number> = {
 export function parseFeeTierLabel(poolMeta: string | null): number | null {
   if (!poolMeta) return null;
   return FEE_TIER_BY_LABEL[poolMeta.trim()] ?? null;
+}
+
+// A API da DefiLlama não expõe o endereço do pool on-chain diretamente —
+// só chain + project + poolMeta (fee tier) + underlyingTokens (endereços
+// dos 2 tokens). Pra achar o pool de uma posição que já lemos on-chain
+// (ver /positions), casa por esses 4 campos — mesmo critério inverso do
+// usado nos scripts de backfill (lá vai poolId->endereço via getPoolInfo,
+// aqui vai endereços on-chain->poolId da DefiLlama). Comparação
+// case-insensitive: underlyingTokens vem em minúsculas na prática, mas não
+// é garantido, e Address (viem) vem checksummed.
+export function findUniswapV3Pool(
+  pools: DefiLlamaPool[],
+  defillamaChainName: string,
+  fee: number,
+  tokenA: string,
+  tokenB: string
+): DefiLlamaPool | undefined {
+  const a = tokenA.toLowerCase();
+  const b = tokenB.toLowerCase();
+  return pools.find((p) => {
+    if (p.chain.toLowerCase() !== defillamaChainName.toLowerCase()) return false;
+    if (p.project !== "uniswap-v3") return false;
+    if (parseFeeTierLabel(p.poolMeta) !== fee) return false;
+    if (!p.underlyingTokens || p.underlyingTokens.length < 2) return false;
+    const addrs = p.underlyingTokens.map((t) => t.toLowerCase());
+    return addrs.includes(a) && addrs.includes(b);
+  });
 }
 
 export async function searchPools(params: {

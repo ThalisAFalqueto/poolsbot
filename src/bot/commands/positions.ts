@@ -1,6 +1,7 @@
 import type { CommandContext, Context } from "grammy";
 import type { Address } from "viem";
 import { chains, getActiveChains } from "../../config/chains.js";
+import { fetchAllPools, findUniswapV3Pool, type DefiLlamaPool } from "../../data/defillama/client.js";
 import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
 import { calculateRealizedApr, type AprResult } from "../../domain/lp-rebalance/calculate-apr.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
@@ -118,6 +119,18 @@ function formatAgeLine(apr: AprResult | null): string {
   return `Idade: ${apr.elapsedDays.toFixed(1)} dias`;
 }
 
+// Dado da DefiLlama, não on-chain — TVL e volume são do POOL inteiro
+// (todos os LPs), não da sua fatia. undefined quando o pool não foi
+// encontrado no dataset da DefiLlama (ver findUniswapV3Pool), null quando
+// foi encontrado mas a própria DefiLlama não reporta volume pra ele (pools
+// muito novos/ilíquidos às vezes vêm assim).
+function formatPoolStatsLine(pool: DefiLlamaPool | undefined): string {
+  if (!pool) return "Pool: TVL/volume indisponível (não encontrado na DefiLlama)";
+  const tvl = `$${Math.round(pool.tvlUsd).toLocaleString("pt-BR")}`;
+  const volume = pool.volumeUsd1d !== null ? `$${Math.round(pool.volumeUsd1d).toLocaleString("pt-BR")}` : "indisponível";
+  return `Pool: TVL ${tvl} · Volume 24h ${volume}`;
+}
+
 function buildPositionBlock(
   p: OnchainPosition,
   il: ImpermanentLossResult,
@@ -126,7 +139,8 @@ function buildPositionBlock(
   wasReset: boolean,
   walletLabel: string | null,
   apr: AprResult | null,
-  feeApr: AprResult | null
+  feeApr: AprResult | null,
+  poolStats: DefiLlamaPool | undefined
 ): string {
   const inRange = isInRange(p.currentTick, p.tickLower, p.tickUpper);
   const low = formatBoundaryPrice(p.tickLower, p.token0.decimals, p.token1.decimals);
@@ -156,6 +170,7 @@ function buildPositionBlock(
   const aprLine = formatAprLine(apr, "APR realizado");
   const feeAprLine = formatFeeAprLine(feeApr);
   const ageLine = formatAgeLine(apr);
+  const poolStatsLine = formatPoolStatsLine(poolStats);
 
   return [
     headerLine,
@@ -167,6 +182,7 @@ function buildPositionBlock(
     `   ${aprLine}`,
     `   ${feeAprLine}`,
     `   ${ageLine}`,
+    `   ${poolStatsLine}`,
   ].join("\n");
 }
 
@@ -302,7 +318,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   // msg.sender seja o DONO da posição, então não dá pra simular pra todas
   // as posições de uma chain de uma vez só se elas vierem de wallets
   // diferentes — precisa agrupar por wallet dentro de cada chain primeiro.
-  const [upserted, feesEntries] = await Promise.all([
+  const [upserted, feesEntries, defillamaPools] = await Promise.all([
     upsertPositions(positions.map((p) => toPositionUpsertInput(user.id, p.chain, p))),
     Promise.all(
       perChain.flatMap(({ chain, positions: chainPositions }) => {
@@ -316,6 +332,14 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         });
       })
     ),
+    // dataset inteiro da DefiLlama (cacheado 5min em fetchAllPools) — usado
+    // só pra achar TVL/volume de cada pool, casando por chain+fee+tokens
+    // (ver findUniswapV3Pool). Uma falha aqui não pode derrubar o comando
+    // inteiro (TVL/volume é enriquecimento, não dado essencial).
+    fetchAllPools().catch((err) => {
+      console.error("[positions] falha ao buscar pools da DefiLlama:", err);
+      return [] as DefiLlamaPool[];
+    }),
   ]);
   const upsertedByTokenId = new Map(upserted.map((u) => [positionKey(u.chain, u.tokenId), u]));
   const feesByTokenId = new Map(feesEntries.flat());
@@ -401,8 +425,9 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         : null;
 
       const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
+      const poolStats = findUniswapV3Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address);
       return {
-        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr, feeApr),
+        block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr, feeApr, poolStats),
         walletAddress: p.walletAddress,
         summaryEntry,
       };
