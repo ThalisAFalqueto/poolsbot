@@ -7,12 +7,13 @@ parte do build TypeScript, fica fora de src/ de propósito.
 
 Uso: python3 plot_range.py '<json>' <caminho_saida.png>
 
-JSON esperado: symbolPair, low, high, entry (ou null), current,
-history (lista de {recordedAt: ISO string, price: number}, pode ser vazia).
+JSON esperado: symbolPair, low, high, entry (ou null), entryDate (ISO string
+ou null), current, history (lista de {recordedAt: ISO string, price: number},
+pode ser vazia).
 """
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import matplotlib
 
@@ -40,6 +41,7 @@ def main() -> None:
     low = payload["low"]
     high = payload["high"]
     entry = payload.get("entry")
+    entry_date = parse_ts(payload["entryDate"]) if payload.get("entryDate") else None
     current = payload["current"]
     history = payload.get("history") or []
 
@@ -64,7 +66,14 @@ def main() -> None:
     ax.axhline(high, color=RANGE_LINE_COLOR, linewidth=1.2, zorder=1)
 
     if entry is not None:
-        ax.axhline(entry, color=ENTRY_COLOR, linestyle="--", linewidth=1.5, label=f"Entrada: {entry:,.2f}", zorder=1)
+        entry_label = f"Entrada: {entry:,.2f}"
+        if entry_date is not None:
+            entry_label += f" ({entry_date.strftime('%d/%m')})"
+        ax.axhline(entry, color=ENTRY_COLOR, linestyle="--", linewidth=1.5, label=entry_label, zorder=1)
+        if entry_date is not None:
+            # linha vertical cruzando a horizontal acima marca o dia exato da
+            # entrada no eixo X — mesma cor/estilo, sem duplicar a legenda.
+            ax.axvline(entry_date, color=ENTRY_COLOR, linestyle="--", linewidth=1.5, zorder=1)
 
     if len(times) >= 2:
         ax.plot(times, prices, color=PRICE_LINE_COLOR, linewidth=2, zorder=2, label="Preço")
@@ -75,6 +84,15 @@ def main() -> None:
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
     fig.autofmt_xdate()
+
+    # eixo X com folga, ajustado pra caber a entrada mesmo se ela cair fora
+    # da janela do histórico plotado (posição aberta há mais tempo do que o
+    # backfill cobre) — mesmo raciocínio do padding do eixo Y abaixo.
+    x_values = list(times) + ([entry_date] if entry_date is not None else [])
+    x_min, x_max = min(x_values), max(x_values)
+    x_span = (x_max - x_min).total_seconds()
+    x_padding = timedelta(seconds=max(x_span * 0.05, 3600))
+    ax.set_xlim(x_min - x_padding, x_max + x_padding)
 
     # eixo Y com folga, ajustado pra caber a faixa inteira e o histórico de preço
     values_to_fit = [low, high, current] + prices + ([entry] if entry is not None else [])

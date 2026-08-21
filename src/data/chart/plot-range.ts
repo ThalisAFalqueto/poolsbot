@@ -16,6 +16,7 @@ export type RangePlotInput = {
   low: number;
   high: number;
   entry: number | null;
+  entryDate: Date | null;
   current: number;
   history: RangePlotHistoryPoint[];
 };

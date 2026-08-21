@@ -74,6 +74,7 @@ export async function graphCommand(ctx: CommandContext<Context>) {
 
   const baseline = await getIlBaseline(resolved.id);
   const entry = baseline ? sqrtPriceX96ToPrice(baseline.sqrtPriceX96, position.token0.decimals, position.token1.decimals) : null;
+  const entryDate = baseline ? baseline.recordedAt : null;
 
   const low = tickToPrice(position.tickLower, position.token0.decimals, position.token1.decimals);
   const high = tickToPrice(position.tickUpper, position.token0.decimals, position.token1.decimals);
@@ -84,7 +85,7 @@ export async function graphCommand(ctx: CommandContext<Context>) {
   const history = await getPriceHistorySince(position.chain, position.poolAddress, since);
 
   try {
-    const png = await renderRangePlot({ symbolPair, low, high, entry, current, history });
+    const png = await renderRangePlot({ symbolPair, low, high, entry, entryDate, current, history });
     await ctx.replyWithPhoto(new InputFile(png, "range.png"));
   } catch (err) {
     console.error("[graph] falha ao gerar imagem:", err);
