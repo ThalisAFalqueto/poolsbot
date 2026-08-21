@@ -100,20 +100,16 @@ function formatFeeAprLine(feeApr: AprResult | null): string {
 // (mesma lógica que Revert Finance anota como "Total Fee > Div. Loss =
 // Lucro"). "≈ USD" só aparece quando token1 É uma stablecoin reconhecida —
 // não uma conversão via oráculo, que o projeto deliberadamente não usa.
-// 2 linhas em vez de 1 — testado em produção (usuário achou a versão de 1
-// linha carregada demais). A nota "≈ USD" foi removida: quando token1 já É
-// uma stablecoin tipo USDC, escrever "USDC ≈ USD" só repete o óbvio (o
-// símbolo já deixa claro) — só teria valor real pra um caso tipo DAI, que
-// não é o comum aqui, não compensa a complexidade de tratar diferente.
-function formatHoldLines(pnl: PnlResult | null, token1Symbol: string): string[] {
-  if (!pnl) return ["vs HOLD: indisponível (fees desconhecidas)"];
+// Voltou a ser 1 linha só (era 2) — usuário achou 2 carregado demais
+// primeiro, depois pediu de volta 1 linha já que entendeu o significado. A
+// nota "≈ USD" continua fora: quando token1 já É uma stablecoin tipo USDC,
+// escrever "USDC ≈ USD" só repete o óbvio (o símbolo já deixa claro).
+function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
+  if (!pnl) return "vs HOLD: indisponível (fees desconhecidas)";
   const vsHold = pnl.ilToken1 + pnl.feesValueToken1;
   const vsHoldPct = pnl.entryValueToken1 > 0 ? (vsHold / pnl.entryValueToken1) * 100 : null;
   const pctText = vsHoldPct !== null ? ` (${vsHoldPct >= 0 ? "+" : ""}${vsHoldPct.toFixed(2)}%)` : "";
-  return [
-    `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol}`,
-    `vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`,
-  ];
+  return `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol} · vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`;
 }
 
 function formatAgeLine(apr: AprResult | null): string {
@@ -168,11 +164,17 @@ function buildPositionBlock(
     fees && pnl
       ? `Fees coletáveis: ${formatAmount(fees.amount0)} ${p.token0.symbol} + ${formatAmount(fees.amount1)} ${p.token1.symbol} ≈ ${formatPrice(pnl.feesValueToken1)} ${p.token1.symbol}`
       : "Fees coletáveis: indisponível (falha ao simular collect())";
+  // "Movimento de preço" (hodlValueToken1 - entryValueToken1) foi removido
+  // daqui — é redundante com a linha de HOLD logo abaixo (que já mostra
+  // hodlValueToken1 direto) e tinha se mostrado confuso no uso real ("o
+  // usdc subiu?" — não, é o valor da cesta de entrada mudando porque o
+  // OUTRO token do par mudou de preço, não porque token1 "subiu"). Rótulo
+  // do IL agora deixa explícito "vs HOLD" pra conectar com a linha abaixo.
   const summaryLine = pnl
-    ? `Movimento de preço: ${pnl.priceMovementToken1 >= 0 ? "+" : ""}${formatPrice(pnl.priceMovementToken1)} ${p.token1.symbol} · IL: ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
-    : `IL: ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
+    ? `IL (posição vs HOLD): ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
+    : `IL (posição vs HOLD): ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
 
-  const holdLines = formatHoldLines(pnl, p.token1.symbol);
+  const holdLine = formatHoldLine(pnl, p.token1.symbol);
   const aprLine = formatAprLine(apr, "APR realizado");
   const feeAprLine = formatFeeAprLine(feeApr);
   const ageLine = formatAgeLine(apr);
@@ -184,7 +186,7 @@ function buildPositionBlock(
     `   ${currentLine}`,
     `   ${feesLine}`,
     `   ${summaryLine}`,
-    ...holdLines.map((l) => `   ${l}`),
+    `   ${holdLine}`,
     `   ${aprLine}`,
     `   ${feeAprLine}`,
     `   ${ageLine}`,
