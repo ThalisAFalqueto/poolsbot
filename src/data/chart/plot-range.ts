@@ -9,12 +9,15 @@ import path from "node:path";
 // via venv local testou limpo nessa máquina). ~1-2s de latência por chamada
 // (spawn + import do matplotlib) — aceitável pra um comando sob demanda,
 // nunca chamado do ciclo automático de 15min.
+export type RangePlotHistoryPoint = { recordedAt: Date; price: number };
+
 export type RangePlotInput = {
   symbolPair: string;
   low: number;
   high: number;
   entry: number | null;
   current: number;
+  history: RangePlotHistoryPoint[];
 };
 
 const PYTHON_BIN = path.join(process.cwd(), ".venv", "bin", "python3");

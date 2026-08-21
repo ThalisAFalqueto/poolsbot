@@ -71,6 +71,13 @@
       "when": 1787318420546,
       "tag": "0009_tiny_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787319447862,
+      "tag": "0010_minor_bloodstrike",
+      "breakpoints": true
     }
   ]
 }

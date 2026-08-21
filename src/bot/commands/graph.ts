@@ -13,6 +13,11 @@ import {
   listPositionRefs,
   type PositionRef,
 } from "../../persistence/repositories/lp-positions.repository.js";
+import { getPriceHistorySince } from "../../persistence/repositories/pool-price-history.repository.js";
+
+// Mesma janela do backfill (ver src/scripts/backfill-price-history.ts) —
+// pedir mais do que isso não adiantaria, o backfill não preenche mais longe.
+const HISTORY_WINDOW_DAYS = 30;
 
 async function resolvePositionRef(userId: number, identifier: string | undefined): Promise<PositionRef | { error: string }> {
   if (identifier) {
@@ -75,8 +80,11 @@ export async function graphCommand(ctx: CommandContext<Context>) {
   const current = sqrtPriceX96ToPrice(position.sqrtPriceX96, position.token0.decimals, position.token1.decimals);
   const symbolPair = `${position.token1.symbol} por ${position.token0.symbol}`;
 
+  const since = new Date(Date.now() - HISTORY_WINDOW_DAYS * 24 * 3600 * 1000);
+  const history = await getPriceHistorySince(position.chain, position.poolAddress, since);
+
   try {
-    const png = await renderRangePlot({ symbolPair, low, high, entry, current });
+    const png = await renderRangePlot({ symbolPair, low, high, entry, current, history });
     await ctx.replyWithPhoto(new InputFile(png, "range.png"));
   } catch (err) {
     console.error("[graph] falha ao gerar imagem:", err);

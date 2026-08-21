@@ -30,6 +30,7 @@ import {
   updatePositionState,
   upsertPositions,
 } from "../../persistence/repositories/lp-positions.repository.js";
+import { insertPriceHistory } from "../../persistence/repositories/pool-price-history.repository.js";
 
 type UserGroup = { userId: number; telegramChatId: string; addresses: Address[] };
 
@@ -135,6 +136,12 @@ export async function checkPositionsJob(): Promise<string> {
   const gasPriceCache = new Map<ChainKey, bigint>();
   let notifiedCount = 0;
 
+  // Um ponto de preço por pool ÚNICO por execução do job (não por posição
+  // nem por usuário) — mesmo pool pode aparecer em várias posições/wallets
+  // no mesmo ciclo, e um ponto a cada 15min já é granularidade suficiente
+  // pro histórico (ver pool_price_history em schema/index.ts).
+  const recordedPricePools = new Set<string>();
+
   for (const user of users) {
     // fetchPositionsForWallets já isola falha de RPC por wallet e por chain
     // (não lança, só omite o que falhou) — o try/catch externo aqui é uma
@@ -175,6 +182,25 @@ export async function checkPositionsJob(): Promise<string> {
           const tokenId = position.tokenId.toString();
           const record = upsertedByTokenId.get(tokenId);
           if (!record) continue; // upsert falhou pra essa posição, pula (loga no próximo ciclo se persistir)
+
+          const pricePoolKey = `${position.chain}:${position.poolAddress}`;
+          if (!recordedPricePools.has(pricePoolKey)) {
+            recordedPricePools.add(pricePoolKey);
+            try {
+              await insertPriceHistory([
+                {
+                  chain: position.chain,
+                  poolAddress: position.poolAddress,
+                  recordedAt: new Date(),
+                  price: sqrtPriceX96ToPrice(position.sqrtPriceX96, position.token0.decimals, position.token1.decimals),
+                  source: "onchain_ingest",
+                },
+              ]);
+            } catch (err) {
+              // não pode derrubar o processamento da posição por causa disso
+              console.error(`[check-positions] falha ao gravar histórico de preço de ${pricePoolKey}:`, err);
+            }
+          }
 
           const state: PositionState = record.isNew
             ? { status: "in_range", outOfRangeSince: null, lastNotifiedAt: null }

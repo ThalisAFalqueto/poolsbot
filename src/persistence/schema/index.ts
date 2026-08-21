@@ -163,6 +163,29 @@ export const poolVolumeHistory = pgTable(
   })
 );
 
+// Preço ao longo do tempo, por pool — usado pro gráfico de linha do /graph
+// (mesmo espírito de pool_volume_history, mas chaveado por (chain,
+// poolAddress) em vez do poolId da DefiLlama: as duas fontes de escrita
+// (backfill via Dune, ingestão contínua) já têm o endereço on-chain do
+// pool em mãos — DefiLlama não entra no caminho aqui, então não faz
+// sentido depender do id dela. Sem índice único: cada escrita tem um
+// recordedAt genuinamente distinto (bucket de hora no backfill, ciclo de
+// 15min na ingestão contínua), não precisa de dedup.
+export const poolPriceHistory = pgTable(
+  "pool_price_history",
+  {
+    id: serial("id").primaryKey(),
+    chain: text("chain").notNull(),
+    poolAddress: text("pool_address").notNull(),
+    recordedAt: timestamp("recorded_at").notNull(),
+    price: doublePrecision("price").notNull(), // token1 por token0, mesma convenção do resto do bot
+    source: text("source").notNull(), // "dune_backfill" | "onchain_ingest"
+  },
+  (table) => ({
+    poolRecordedAtIdx: index("pool_price_history_pool_recorded_at_idx").on(table.chain, table.poolAddress, table.recordedAt),
+  })
+);
+
 export const lpPositionStatusEnum = pgEnum("lp_position_status", ["in_range", "out_of_range"]);
 
 // Diferente de alertRules (só muda quando o usuário interage com o bot), a
