@@ -117,16 +117,37 @@ describe.skipIf(!chains.base.rpcUrl)("data/onchain/client — Base (RPC real, sm
 // Mesmos smoke tests condicionais da Base acima — só rodam se
 // OPTIMISM_RPC_URL/POLYGON_RPC_URL estiverem configuradas. Sem wallet de
 // teste conhecida com posição real nessas chains ainda.
+//
+// Descoberta real ao rodar isso pela primeira vez: WALLET_WITHOUT_POSITIONS
+// (o endereço de burn 0x...dEaD) NÃO está vazio na Optimism (32 posições) nem
+// na Polygon (542 posições) — gente manda NFT de posição de LP pra lá de
+// propósito ou por acidente, e isso claramente aconteceu bastante nessas duas
+// chains (não na Arbitrum/Base, onde a suposição de "vazio" segue valendo).
+// Em vez de trocar de endereço (mesma suposição frágil, só adiada), o teste
+// virou validação estrutural de verdade — reaproveita as mesmas checagens de
+// forma já usadas no describe principal acima, mais forte que só "não lança".
+function assertWellFormedPositions(positions: OnchainPosition[]) {
+  for (const p of positions) {
+    expect(isAddress(p.poolAddress)).toBe(true);
+    expect(isAddress(p.token0.address)).toBe(true);
+    expect(isAddress(p.token1.address)).toBe(true);
+    expect(p.tickLower).toBeLessThan(p.tickUpper);
+    expect(KNOWN_FEE_TIERS).toContain(p.fee);
+    expect(p.liquidity).toBeGreaterThan(0n);
+    expect(p.sqrtPriceX96).toBeGreaterThan(0n);
+  }
+}
+
 describe.skipIf(!chains.optimism.rpcUrl)("data/onchain/client — Optimism (RPC real, smoke test)", () => {
-  it("resolve o client e não lança pra uma wallet sem posições", async () => {
-    const empty = await fetchPositionsForWallet("optimism", WALLET_WITHOUT_POSITIONS);
-    expect(empty).toEqual([]);
+  it("resolve o client e retorna posições bem formadas", async () => {
+    const positions = await fetchPositionsForWallet("optimism", WALLET_WITHOUT_POSITIONS);
+    assertWellFormedPositions(positions);
   }, 30000);
 });
 
 describe.skipIf(!chains.polygon.rpcUrl)("data/onchain/client — Polygon (RPC real, smoke test)", () => {
-  it("resolve o client e não lança pra uma wallet sem posições", async () => {
-    const empty = await fetchPositionsForWallet("polygon", WALLET_WITHOUT_POSITIONS);
-    expect(empty).toEqual([]);
+  it("resolve o client e retorna posições bem formadas", async () => {
+    const positions = await fetchPositionsForWallet("polygon", WALLET_WITHOUT_POSITIONS);
+    assertWellFormedPositions(positions);
   }, 30000);
 });
