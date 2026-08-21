@@ -1,0 +1,1 @@
+ALTER TABLE "lp_positions" ADD COLUMN "label" text;

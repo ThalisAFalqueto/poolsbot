@@ -24,6 +24,8 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/removewallet <endereço> — desvincula uma wallet",
       `/positions — mostra suas posições de LP em todas as wallets vinculadas (${activeChainNames}), se estão dentro da faixa, e o IL de cada uma`,
       "/status — saúde do bot: última execução de cada job automático e um resumo da sua conta",
+      "/labelposition <tokenId> <nome> — dá um apelido curto pra uma posição (ex: /labelposition 5658859 p1)",
+      "/graph [apelido ou tokenId] — imagem mostrando a faixa da posição vs. preço de entrada e atual (sem argumento, usa sua única posição)",
     ].join("\n")
   );
 }

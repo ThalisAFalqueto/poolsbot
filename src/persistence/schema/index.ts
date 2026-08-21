@@ -191,6 +191,12 @@ export const lpPositions = pgTable(
     fee: integer("fee").notNull(), // hundredths of a bip: 500/3000/10000
     tickLower: integer("tick_lower").notNull(),
     tickUpper: integer("tick_upper").notNull(),
+    // Apelido opcional pra referenciar a posição sem o tokenId cru (usado
+    // por /labelposition e /graph). ATENÇÃO: nunca incluir em
+    // PositionUpsertInput — a reconciliação de 15min faz .update(...).set({
+    // ...input }), e como label não está no tipo do input, o spread não
+    // sobrescreve a coluna. Só escrever nela via setPositionLabel().
+    label: text("label"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },

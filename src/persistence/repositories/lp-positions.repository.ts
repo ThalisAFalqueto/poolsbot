@@ -1,4 +1,4 @@
-import { and, eq, notInArray } from "drizzle-orm";
+import { and, eq, ilike, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
 import { lpPositionIlAlertState, lpPositionIlBaseline, lpPositions, lpPositionState, userWallets, users } from "../schema/index.js";
 import { decideBaseline } from "../../domain/lp-rebalance/il-baseline.js";
@@ -86,6 +86,51 @@ export async function deleteStalePositions(userId: number, chain: string, active
         notInArray(lpPositions.tokenId, activeTokenIds)
       )
     );
+}
+
+// Escreve o apelido — ÚNICO lugar que deveria tocar essa coluna (ver
+// comentário em schema/index.ts sobre por que não pode entrar em
+// PositionUpsertInput). Não desambigua por chain se o mesmo tokenId
+// existir em mais de uma chain do mesmo usuário — atualiza todas as que
+// baterem; aceitável hoje (uso real é só Arbitrum).
+export async function setPositionLabel(userId: number, tokenId: string, label: string): Promise<boolean> {
+  const updated = await db
+    .update(lpPositions)
+    .set({ label, updatedAt: new Date() })
+    .where(and(eq(lpPositions.userId, userId), eq(lpPositions.tokenId, tokenId)))
+    .returning({ id: lpPositions.id });
+  return updated.length > 0;
+}
+
+export type PositionRef = { id: number; tokenId: string; chain: string };
+
+// Tenta achar por apelido primeiro (case-insensitive), senão trata o
+// identificador como tokenId cru. null se não achar dos dois jeitos.
+export async function findPositionByLabelOrTokenId(userId: number, identifier: string): Promise<PositionRef | null> {
+  const cols = { id: lpPositions.id, tokenId: lpPositions.tokenId, chain: lpPositions.chain };
+  const [byLabel] = await db
+    .select(cols)
+    .from(lpPositions)
+    .where(and(eq(lpPositions.userId, userId), ilike(lpPositions.label, identifier)))
+    .limit(1);
+  if (byLabel) return byLabel;
+
+  const [byTokenId] = await db
+    .select(cols)
+    .from(lpPositions)
+    .where(and(eq(lpPositions.userId, userId), eq(lpPositions.tokenId, identifier)))
+    .limit(1);
+  return byTokenId ?? null;
+}
+
+// Lista todas as posições do usuário (id, tokenId, chain) — usado por
+// /graph sem argumento, pra decidir entre "usa a única" e "pede pra
+// especificar" sem precisar de outra função inteira só pra contar.
+export async function listPositionRefs(userId: number): Promise<PositionRef[]> {
+  return db
+    .select({ id: lpPositions.id, tokenId: lpPositions.tokenId, chain: lpPositions.chain })
+    .from(lpPositions)
+    .where(eq(lpPositions.userId, userId));
 }
 
 export async function getPositionState(lpPositionId: number): Promise<PositionState> {

@@ -5,6 +5,10 @@ dist/
 .DS_Store
 .claude/
 
+# venv Python (matplotlib pro /graph) — regenerado via
+# `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+.venv/
+
 # contracts/ (Foundry) — deps e artefatos de build, regenerados via
 # `forge install` / `forge build`, mesmo espírito de node_modules/dist acima
 contracts/lib/
