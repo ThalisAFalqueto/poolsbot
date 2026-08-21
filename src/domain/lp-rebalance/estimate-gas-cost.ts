@@ -8,7 +8,7 @@ import type { OnchainPosition } from "./types.js";
 const REBALANCE_GAS_UNITS = 500_000n;
 
 export type GasCostEstimate = {
-  costEth: number;
+  costEth: number; // custo no token de gas NATIVO da chain — "ETH" no nome, mas mal rotulado pra chains que não pagam gas em ETH (ex: Polygon paga em POL)
   costToken1: number | null; // null quando o par não envolve WETH — sem oráculo de preço, não dá pra converter
 };
 

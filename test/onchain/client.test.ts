@@ -113,3 +113,20 @@ describe.skipIf(!chains.base.rpcUrl)("data/onchain/client — Base (RPC real, sm
     expect(empty).toEqual([]);
   }, 30000);
 });
+
+// Mesmos smoke tests condicionais da Base acima — só rodam se
+// OPTIMISM_RPC_URL/POLYGON_RPC_URL estiverem configuradas. Sem wallet de
+// teste conhecida com posição real nessas chains ainda.
+describe.skipIf(!chains.optimism.rpcUrl)("data/onchain/client — Optimism (RPC real, smoke test)", () => {
+  it("resolve o client e não lança pra uma wallet sem posições", async () => {
+    const empty = await fetchPositionsForWallet("optimism", WALLET_WITHOUT_POSITIONS);
+    expect(empty).toEqual([]);
+  }, 30000);
+});
+
+describe.skipIf(!chains.polygon.rpcUrl)("data/onchain/client — Polygon (RPC real, smoke test)", () => {
+  it("resolve o client e não lança pra uma wallet sem posições", async () => {
+    const empty = await fetchPositionsForWallet("polygon", WALLET_WITHOUT_POSITIONS);
+    expect(empty).toEqual([]);
+  }, 30000);
+});

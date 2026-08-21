@@ -1,5 +1,5 @@
 import type { Chain } from "viem";
-import { arbitrum, base } from "viem/chains";
+import { arbitrum, base, optimism, polygon } from "viem/chains";
 import { env } from "./env.js";
 
 // Endereços do Uniswap V3 são determinísticos (CREATE2) e idênticos em
@@ -18,6 +18,20 @@ const BASE_UNISWAP_V3 = {
   nonfungiblePositionManager: "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
 } as const;
 
+// Idênticos aos da Arbitrum (mesmo deploy determinístico) — confirmado via
+// docs oficiais da Uniswap (developers.uniswap.org/contracts/v3/reference/
+// deployments/{optimism,polygon}-deployments) e cruzado com Etherscan/
+// PolygonScan antes de usar.
+const OPTIMISM_UNISWAP_V3 = {
+  factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+  nonfungiblePositionManager: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+} as const;
+
+const POLYGON_UNISWAP_V3 = {
+  factory: "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+  nonfungiblePositionManager: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
+} as const;
+
 // viemChain tipado como Chain (não o literal específico de cada objeto de
 // viem/chains) — evita que o registry fique com N tipos de PublicClient
 // mutuamente incompatíveis (um por chain), o que quebraria getPublicClient
@@ -28,8 +42,10 @@ export const chains = {
     defillamaChainName: "Arbitrum",
     uniswapV3: ARBITRUM_UNISWAP_V3,
     // WETH nativo/canônico da chain — usado só pra converter custo de gas
-    // (sempre pago em ETH) pra token1 quando o par envolve WETH, sem
-    // precisar de oráculo de preço externo (ver estimate-gas-cost.ts).
+    // pra token1 quando o par envolve WETH, sem precisar de oráculo de
+    // preço externo (ver estimate-gas-cost.ts). Assume que o gas da chain é
+    // pago em ETH — vale pra Arbitrum/Base/Optimism, NÃO pra Polygon (ver
+    // ressalva na entrada dela abaixo).
     wethAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
     rpcUrl: env.arbitrumRpcUrl as string | undefined,
   },
@@ -39,6 +55,33 @@ export const chains = {
     uniswapV3: BASE_UNISWAP_V3,
     wethAddress: "0x4200000000000000000000000000000000000006", // confirmado via teste on-chain real desta sessão
     rpcUrl: env.baseRpcUrl,
+  },
+  optimism: {
+    viemChain: optimism as Chain,
+    defillamaChainName: "Optimism",
+    uniswapV3: OPTIMISM_UNISWAP_V3,
+    // Predeploy padrão OP Stack — mesmo endereço da Base (ambas L2s OP
+    // Stack), gas pago em ETH nativo, assunção de estimate-gas-cost.ts
+    // continua válida aqui.
+    wethAddress: "0x4200000000000000000000000000000000000006",
+    rpcUrl: env.optimismRpcUrl,
+  },
+  polygon: {
+    viemChain: polygon as Chain,
+    defillamaChainName: "Polygon",
+    uniswapV3: POLYGON_UNISWAP_V3,
+    // ATENÇÃO: gas na Polygon é pago em POL (token nativo), não em ETH — a
+    // assunção "gas sempre em ETH" de estimate-gas-cost.ts NÃO vale aqui.
+    // Este endereço é o WETH bridged (token ERC-20 comum em pares como
+    // WETH/USDC), não o token de gas. Resultado prático: costToken1 só é
+    // preenchido pra posições Polygon que envolvem esse WETH bridged
+    // especificamente — a maioria das posições Polygon (que não usam WETH
+    // como par) vai ver a linha de custo de gas omitida, igual a qualquer
+    // par sem WETH nas outras chains hoje. Limitação aceita, não é bug —
+    // corrigir de verdade exigiria buscar o preço de POL em algum lugar
+    // (oráculo externo), fora de escopo até alguém pedir.
+    wethAddress: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+    rpcUrl: env.polygonRpcUrl,
   },
 } as const;
 
