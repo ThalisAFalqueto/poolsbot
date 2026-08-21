@@ -8,7 +8,6 @@ import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../doma
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
 import { formatBoundaryPrice, formatPrice } from "../../domain/lp-rebalance/format-reason.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
-import { isStablecoinSymbol } from "../../domain/lp-rebalance/stablecoins.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
 import { listWallets } from "../../persistence/repositories/user-wallets.repository.js";
@@ -101,13 +100,20 @@ function formatFeeAprLine(feeApr: AprResult | null): string {
 // (mesma lógica que Revert Finance anota como "Total Fee > Div. Loss =
 // Lucro"). "≈ USD" só aparece quando token1 É uma stablecoin reconhecida —
 // não uma conversão via oráculo, que o projeto deliberadamente não usa.
-function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
-  if (!pnl) return "vs HOLD: indisponível (fees desconhecidas)";
+// 2 linhas em vez de 1 — testado em produção (usuário achou a versão de 1
+// linha carregada demais). A nota "≈ USD" foi removida: quando token1 já É
+// uma stablecoin tipo USDC, escrever "USDC ≈ USD" só repete o óbvio (o
+// símbolo já deixa claro) — só teria valor real pra um caso tipo DAI, que
+// não é o comum aqui, não compensa a complexidade de tratar diferente.
+function formatHoldLines(pnl: PnlResult | null, token1Symbol: string): string[] {
+  if (!pnl) return ["vs HOLD: indisponível (fees desconhecidas)"];
   const vsHold = pnl.ilToken1 + pnl.feesValueToken1;
   const vsHoldPct = pnl.entryValueToken1 > 0 ? (vsHold / pnl.entryValueToken1) * 100 : null;
   const pctText = vsHoldPct !== null ? ` (${vsHoldPct >= 0 ? "+" : ""}${vsHoldPct.toFixed(2)}%)` : "";
-  const usdNote = isStablecoinSymbol(token1Symbol) ? " ≈ USD" : "";
-  return `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol}${usdNote} · LP vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`;
+  return [
+    `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol}`,
+    `vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`,
+  ];
 }
 
 function formatAgeLine(apr: AprResult | null): string {
@@ -166,7 +172,7 @@ function buildPositionBlock(
     ? `Movimento de preço: ${pnl.priceMovementToken1 >= 0 ? "+" : ""}${formatPrice(pnl.priceMovementToken1)} ${p.token1.symbol} · IL: ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
     : `IL: ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
 
-  const holdLine = formatHoldLine(pnl, p.token1.symbol);
+  const holdLines = formatHoldLines(pnl, p.token1.symbol);
   const aprLine = formatAprLine(apr, "APR realizado");
   const feeAprLine = formatFeeAprLine(feeApr);
   const ageLine = formatAgeLine(apr);
@@ -178,7 +184,7 @@ function buildPositionBlock(
     `   ${currentLine}`,
     `   ${feesLine}`,
     `   ${summaryLine}`,
-    `   ${holdLine}`,
+    ...holdLines.map((l) => `   ${l}`),
     `   ${aprLine}`,
     `   ${feeAprLine}`,
     `   ${ageLine}`,
