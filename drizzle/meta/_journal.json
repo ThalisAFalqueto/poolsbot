@@ -50,6 +50,13 @@
       "when": 1787015929479,
       "tag": "0006_dry_network",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787277528188,
+      "tag": "0007_legal_blue_blade",
+      "breakpoints": true
     }
   ]
 }

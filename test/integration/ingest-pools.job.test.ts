@@ -35,6 +35,8 @@ function makePool(poolId: string, overrides: Record<string, unknown> = {}) {
     sigma: null,
     apyMean30d: null,
     apyBase7d: null,
+    volumeUsd1d: null,
+    volumeUsd7d: null,
     outlier: false,
     ...overrides,
   };

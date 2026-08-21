@@ -9,6 +9,7 @@ import {
   boolean,
   uniqueIndex,
   index,
+  date,
 } from "drizzle-orm/pg-core";
 
 export const users = pgTable(
@@ -129,6 +130,29 @@ export const apyHistory = pgTable(
   },
   (table) => ({
     poolIdRecordedAtIdx: index("apy_history_pool_id_recorded_at_idx").on(table.poolId, table.recordedAt),
+  })
+);
+
+// Volume diário por pool — granularidade de DIA (não a cada 15min como
+// apy_history), é o que a detecção de pico de volume (tipo wash trading,
+// regra de +500% dia-sobre-dia) precisa. Duas fontes possíveis: backfill
+// pontual via Dune (script manual, roda uma vez, alta precisão — soma
+// exata dos swaps do dia) ou ingestão contínua via DefiLlama (job de
+// 15min, grava 1x/dia o volumeUsd1d que já vem de graça na mesma chamada
+// que abastece apy_history) — "source" existe pra não confundir as duas
+// precisões na hora de debugar.
+export const poolVolumeHistory = pgTable(
+  "pool_volume_history",
+  {
+    id: serial("id").primaryKey(),
+    poolId: text("pool_id").notNull(), // mesmo id da DefiLlama usado em watchedPools/apyHistory
+    date: date("date").notNull(),
+    volumeUsd: doublePrecision("volume_usd").notNull(),
+    source: text("source").notNull(), // "dune_backfill" | "defillama_ingest"
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    poolIdDateIdx: uniqueIndex("pool_volume_history_pool_id_date_idx").on(table.poolId, table.date),
   })
 );
 

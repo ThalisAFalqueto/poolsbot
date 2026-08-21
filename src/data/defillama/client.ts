@@ -19,6 +19,7 @@ export type DefiLlamaPool = {
   apyMean30d: number | null; // média de APY dos últimos 30 dias — usado pra detectar picos transitórios
   apyBase7d: number | null; // APY base assumindo faixa de concentração padrão (0.3%/0.001%) — não é a faixa real
   outlier: boolean; // sinalizado pela própria DefiLlama como estatisticamente não confiável
+  volumeUsd1d: number | null; // volume de trade das últimas 24h — null em pools que não são DEX (ex: staking)
   volumeUsd7d: number | null; // volume de trade dos últimos 7d — null em pools que não são DEX (ex: staking)
   poolMeta: string | null; // pra Uniswap V3: rótulo do fee tier, ex: "0.05%" (não o valor numérico 500 que o contrato usa)
   underlyingTokens: string[] | null; // endereços dos tokens do par — null em pools que não são de 2 tokens

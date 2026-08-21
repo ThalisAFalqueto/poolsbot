@@ -18,6 +18,7 @@ export const env = {
   baseRpcUrl: optional("BASE_RPC_URL"),
   optimismRpcUrl: optional("OPTIMISM_RPC_URL"),
   polygonRpcUrl: optional("POLYGON_RPC_URL"),
+  duneApiKey: optional("DUNE_API_KEY"),
   databaseUrl: required("DATABASE_URL"),
   redisUrl: required("REDIS_URL"),
 };
