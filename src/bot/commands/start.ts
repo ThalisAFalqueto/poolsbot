@@ -26,6 +26,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/status — saúde do bot: última execução de cada job automático e um resumo da sua conta",
       "/labelposition <tokenId> <nome> — dá um apelido curto pra uma posição (ex: /labelposition 5658859 p1)",
       "/graph [apelido ou tokenId] — imagem mostrando a faixa da posição vs. preço de entrada e atual (sem argumento, usa sua única posição)",
+      "/closed — histórico de posições de LP já fechadas, com o P&L final de cada uma",
     ].join("\n")
   );
 }

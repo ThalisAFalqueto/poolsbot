@@ -14,6 +14,7 @@ import { listWallets } from "../../persistence/repositories/user-wallets.reposit
 import {
   syncIlBaseline,
   toPositionUpsertInput,
+  updatePositionSnapshot,
   upsertPositions,
 } from "../../persistence/repositories/lp-positions.repository.js";
 
@@ -408,6 +409,26 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
             feesAmount1: fees.amount1,
           })
         : null;
+
+      if (pnl) {
+        // Grava o "último P&L conhecido" — é o que permite arquivar a
+        // posição em closed_lp_positions se ela fechar antes do próximo
+        // /positions (ver archiveAndDeleteStalePositions). Falha aqui não
+        // pode derrubar a listagem em si.
+        try {
+          await updatePositionSnapshot(record.id, {
+            entryValueToken1: pnl.entryValueToken1,
+            positionValueToken1: pnl.positionValueToken1,
+            feesValueToken1: pnl.feesValueToken1,
+            hodlValueToken1: pnl.hodlValueToken1,
+            ilToken1: pnl.ilToken1,
+            totalPnlToken1: pnl.totalPnlToken1,
+            entryDate: il.since,
+          });
+        } catch (err) {
+          console.error(`[positions] falha ao gravar snapshot da posição #${p.tokenId}:`, err);
+        }
+      }
 
       const apr = pnl
         ? calculateRealizedApr({ entryValueToken1: pnl.entryValueToken1, totalPnlToken1: pnl.totalPnlToken1, since: il.since, now })

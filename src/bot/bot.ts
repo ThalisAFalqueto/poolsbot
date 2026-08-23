@@ -16,6 +16,7 @@ import { statusCommand } from "./commands/status.js";
 import { rangeCommand } from "./commands/range.js";
 import { graphCommand } from "./commands/graph.js";
 import { labelPositionCommand } from "./commands/labelposition.js";
+import { closedCommand } from "./commands/closed.js";
 
 export function createBot(): Bot {
   const bot = new Bot(env.telegramBotToken);
@@ -36,6 +37,7 @@ export function createBot(): Bot {
   bot.command("range", rangeCommand);
   bot.command("graph", graphCommand);
   bot.command("labelposition", labelPositionCommand);
+  bot.command("closed", closedCommand);
 
   bot.catch((err) => {
     console.error("Erro não tratado no bot:", err.error);

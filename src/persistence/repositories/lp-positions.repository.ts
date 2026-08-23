@@ -1,6 +1,14 @@
-import { and, eq, ilike, notInArray } from "drizzle-orm";
+import { and, desc, eq, ilike, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
-import { lpPositionIlAlertState, lpPositionIlBaseline, lpPositions, lpPositionState, userWallets, users } from "../schema/index.js";
+import {
+  closedLpPositions,
+  lpPositionIlAlertState,
+  lpPositionIlBaseline,
+  lpPositions,
+  lpPositionState,
+  userWallets,
+  users,
+} from "../schema/index.js";
 import { decideBaseline } from "../../domain/lp-rebalance/il-baseline.js";
 import type { IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
 import type { OnchainPosition, PositionState } from "../../domain/lp-rebalance/types.js";
@@ -69,23 +77,85 @@ export async function upsertPositions(inputs: PositionUpsertInput[]): Promise<Up
   return results;
 }
 
+export type PositionSnapshot = {
+  entryValueToken1: number;
+  positionValueToken1: number;
+  feesValueToken1: number;
+  hodlValueToken1: number;
+  ilToken1: number;
+  totalPnlToken1: number;
+  entryDate: Date;
+};
+
+// Grava o "último P&L conhecido" — chamado só pelo /positions (não pelo job
+// de 15min, que não busca fees por custo de RPC extra por posição). É essa
+// gravação que permite arquivar a posição quando ela fechar (ver
+// archiveAndDeleteStalePositions abaixo); sem nenhum /positions rodado
+// antes do fechamento, não há o que arquivar.
+export async function updatePositionSnapshot(lpPositionId: number, snapshot: PositionSnapshot): Promise<void> {
+  await db
+    .update(lpPositions)
+    .set({
+      lastKnownEntryValueToken1: snapshot.entryValueToken1,
+      lastKnownPositionValueToken1: snapshot.positionValueToken1,
+      lastKnownFeesValueToken1: snapshot.feesValueToken1,
+      lastKnownHodlValueToken1: snapshot.hodlValueToken1,
+      lastKnownIlToken1: snapshot.ilToken1,
+      lastKnownTotalPnlToken1: snapshot.totalPnlToken1,
+      lastKnownEntryDate: snapshot.entryDate,
+      lastSnapshotAt: new Date(),
+    })
+    .where(eq(lpPositions.id, lpPositionId));
+}
+
 // Reconciliação: remove qualquer posição do usuário/chain cujo tokenId não
 // esteja mais no conjunto ativo on-chain (fechada ou transferida pra outra
-// wallet) — cascade limpa lp_position_state junto.
-export async function deleteStalePositions(userId: number, chain: string, activeTokenIds: string[]): Promise<void> {
-  if (activeTokenIds.length === 0) {
-    await db.delete(lpPositions).where(and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain)));
-    return;
-  }
-  await db
-    .delete(lpPositions)
-    .where(
-      and(
-        eq(lpPositions.userId, userId),
-        eq(lpPositions.chain, chain),
-        notInArray(lpPositions.tokenId, activeTokenIds)
-      )
+// wallet) — cascade limpa lp_position_state junto. ANTES de deletar, arquiva
+// em closed_lp_positions qualquer posição que tenha um snapshot conhecido
+// (ver updatePositionSnapshot) — sem isso, fechar uma posição apagava todo
+// o histórico dela (achado real, 21/08/2026: usuário ia fechar a posição
+// WBTC/USDC real e perder IL/fees/P&L acumulados sem nenhum rastro).
+export async function archiveAndDeleteStalePositions(userId: number, chain: string, activeTokenIds: string[]): Promise<void> {
+  const staleWhere =
+    activeTokenIds.length === 0
+      ? and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain))
+      : and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain), notInArray(lpPositions.tokenId, activeTokenIds));
+
+  const stale = await db.select().from(lpPositions).where(staleWhere);
+
+  const toArchive = stale.filter(
+    (p): p is typeof p & { lastSnapshotAt: Date } =>
+      p.lastSnapshotAt !== null &&
+      p.lastKnownEntryValueToken1 !== null &&
+      p.lastKnownPositionValueToken1 !== null &&
+      p.lastKnownFeesValueToken1 !== null &&
+      p.lastKnownHodlValueToken1 !== null &&
+      p.lastKnownIlToken1 !== null &&
+      p.lastKnownTotalPnlToken1 !== null &&
+      p.lastKnownEntryDate !== null
+  );
+
+  if (toArchive.length > 0) {
+    await db.insert(closedLpPositions).values(
+      toArchive.map((p) => ({
+        userId: p.userId,
+        chain: p.chain,
+        tokenId: p.tokenId,
+        label: p.label,
+        token0Symbol: p.token0Symbol,
+        token1Symbol: p.token1Symbol,
+        openedAt: p.lastKnownEntryDate!,
+        entryValueToken1: p.lastKnownEntryValueToken1!,
+        finalPositionValueToken1: p.lastKnownPositionValueToken1!,
+        finalFeesValueToken1: p.lastKnownFeesValueToken1!,
+        hodlValueToken1: p.lastKnownHodlValueToken1!,
+        ilToken1: p.lastKnownIlToken1!,
+        totalPnlToken1: p.lastKnownTotalPnlToken1!,
+      }))
     );
+  }
+
+  await db.delete(lpPositions).where(staleWhere);
 }
 
 // Escreve o apelido — ÚNICO lugar que deveria tocar essa coluna (ver
@@ -253,4 +323,42 @@ export async function updateIlAlertState(lpPositionId: number, next: IlAlertStat
     .insert(lpPositionIlAlertState)
     .values(values)
     .onConflictDoUpdate({ target: lpPositionIlAlertState.lpPositionId, set: values });
+}
+
+export type ClosedPositionRow = {
+  chain: string;
+  tokenId: string;
+  label: string | null;
+  token0Symbol: string;
+  token1Symbol: string;
+  openedAt: Date;
+  closedAt: Date;
+  entryValueToken1: number;
+  finalPositionValueToken1: number;
+  finalFeesValueToken1: number;
+  hodlValueToken1: number;
+  ilToken1: number;
+  totalPnlToken1: number;
+};
+
+export async function listClosedPositions(userId: number): Promise<ClosedPositionRow[]> {
+  return db
+    .select({
+      chain: closedLpPositions.chain,
+      tokenId: closedLpPositions.tokenId,
+      label: closedLpPositions.label,
+      token0Symbol: closedLpPositions.token0Symbol,
+      token1Symbol: closedLpPositions.token1Symbol,
+      openedAt: closedLpPositions.openedAt,
+      closedAt: closedLpPositions.closedAt,
+      entryValueToken1: closedLpPositions.entryValueToken1,
+      finalPositionValueToken1: closedLpPositions.finalPositionValueToken1,
+      finalFeesValueToken1: closedLpPositions.finalFeesValueToken1,
+      hodlValueToken1: closedLpPositions.hodlValueToken1,
+      ilToken1: closedLpPositions.ilToken1,
+      totalPnlToken1: closedLpPositions.totalPnlToken1,
+    })
+    .from(closedLpPositions)
+    .where(eq(closedLpPositions.userId, userId))
+    .orderBy(desc(closedLpPositions.closedAt));
 }

@@ -4,13 +4,15 @@ import { db } from "../../src/persistence/db.js";
 import { findOrCreateUserByTelegramChatId } from "../../src/persistence/repositories/users.repository.js";
 import { addWallet } from "../../src/persistence/repositories/user-wallets.repository.js";
 import {
-  deleteStalePositions,
+  archiveAndDeleteStalePositions,
   getIlAlertState,
   getIlBaseline,
   getPositionState,
+  listClosedPositions,
   listUserWallets,
   syncIlBaseline,
   updateIlAlertState,
+  updatePositionSnapshot,
   updatePositionState,
   upsertPositions,
   type PositionUpsertInput,
@@ -91,7 +93,7 @@ describe("lp-positions.repository", () => {
     });
   });
 
-  describe("deleteStalePositions", () => {
+  describe("archiveAndDeleteStalePositions", () => {
     it("remove só as posições que não estão mais na lista ativa", async () => {
       const user = await findOrCreateUserByTelegramChatId("chat-1");
       await upsertPositions([
@@ -99,7 +101,7 @@ describe("lp-positions.repository", () => {
         makeInput({ userId: user.id, tokenId: "2" }),
       ]);
 
-      await deleteStalePositions(user.id, CHAIN, ["1"]); // "2" não está mais ativa
+      await archiveAndDeleteStalePositions(user.id, CHAIN, ["1"]); // "2" não está mais ativa
 
       const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_positions`);
       expect(Number(count.rows[0]?.count)).toBe(1);
@@ -109,7 +111,7 @@ describe("lp-positions.repository", () => {
       const user = await findOrCreateUserByTelegramChatId("chat-2");
       await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
 
-      await deleteStalePositions(user.id, CHAIN, []);
+      await archiveAndDeleteStalePositions(user.id, CHAIN, []);
 
       const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_positions`);
       expect(Number(count.rows[0]?.count)).toBe(0);
@@ -118,10 +120,55 @@ describe("lp-positions.repository", () => {
     it("cascade limpa lp_position_state junto", async () => {
       const user = await findOrCreateUserByTelegramChatId("chat-3");
       await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
-      await deleteStalePositions(user.id, CHAIN, []);
+      await archiveAndDeleteStalePositions(user.id, CHAIN, []);
 
       const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_position_state`);
       expect(Number(count.rows[0]?.count)).toBe(0);
+    });
+
+    it("sem snapshot conhecido (nunca passou por /positions), fecha sem arquivar — comportamento antigo preservado", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-4");
+      await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
+
+      await archiveAndDeleteStalePositions(user.id, CHAIN, []);
+
+      const closed = await listClosedPositions(user.id);
+      expect(closed).toHaveLength(0);
+    });
+
+    it("com snapshot conhecido, arquiva em closed_lp_positions ANTES de deletar", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-5");
+      const [{ id }] = await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
+      const entryDate = new Date("2026-08-01T00:00:00Z");
+
+      await updatePositionSnapshot(id, {
+        entryValueToken1: 100,
+        positionValueToken1: 95,
+        feesValueToken1: 3,
+        hodlValueToken1: 98,
+        ilToken1: -3,
+        totalPnlToken1: -2,
+        entryDate,
+      });
+
+      await archiveAndDeleteStalePositions(user.id, CHAIN, []);
+
+      const closed = await listClosedPositions(user.id);
+      expect(closed).toHaveLength(1);
+      expect(closed[0]).toMatchObject({
+        chain: CHAIN,
+        tokenId: "1",
+        entryValueToken1: 100,
+        finalPositionValueToken1: 95,
+        finalFeesValueToken1: 3,
+        hodlValueToken1: 98,
+        ilToken1: -3,
+        totalPnlToken1: -2,
+      });
+      expect(closed[0]?.openedAt.getTime()).toBe(entryDate.getTime());
+
+      const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_positions`);
+      expect(Number(count.rows[0]?.count)).toBe(0); // ainda deletou a linha viva
     });
   });
 

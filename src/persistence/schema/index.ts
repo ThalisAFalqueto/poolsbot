@@ -220,12 +220,60 @@ export const lpPositions = pgTable(
     // ...input }), e como label não está no tipo do input, o spread não
     // sobrescreve a coluna. Só escrever nela via setPositionLabel().
     label: text("label"),
+    // "Último snapshot conhecido" do P&L completo — escrito só pelo /positions
+    // (não pelo job de 15min, que não busca fees por custo de RPC). Existe
+    // pra não perder o histórico quando a posição fecha de vez: liquidity=0
+    // some do fetch on-chain, e SEM isso a reconciliação simplesmente
+    // apagava a linha (IL, fees, P&L, tudo) sem deixar rastro. Ver
+    // archiveAndDeleteStalePositions em lp-positions.repository.ts — usa
+    // essas colunas pra gravar em closed_lp_positions ANTES de deletar.
+    // Todas nullable: uma posição que nunca passou por /positions (só pelo
+    // job automático) não tem snapshot pra arquivar, e o fechamento cai de
+    // volta no comportamento antigo (sem histórico) — limitação conhecida.
+    lastKnownEntryValueToken1: doublePrecision("last_known_entry_value_token1"),
+    lastKnownPositionValueToken1: doublePrecision("last_known_position_value_token1"),
+    lastKnownFeesValueToken1: doublePrecision("last_known_fees_value_token1"),
+    lastKnownHodlValueToken1: doublePrecision("last_known_hodl_value_token1"),
+    lastKnownIlToken1: doublePrecision("last_known_il_token1"),
+    lastKnownTotalPnlToken1: doublePrecision("last_known_total_pnl_token1"),
+    lastKnownEntryDate: timestamp("last_known_entry_date"),
+    lastSnapshotAt: timestamp("last_snapshot_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => ({
     tokenIdChainIdx: uniqueIndex("lp_positions_token_id_chain_idx").on(table.tokenId, table.chain),
     userIdx: index("lp_positions_user_id_idx").on(table.userId),
+  })
+);
+
+// Registro PERMANENTE de uma posição depois que ela fecha de vez (liquidez
+// zerada, some do fetch on-chain) — sem isso, fechar uma posição apagava
+// todo o histórico dela (ver comentário nas colunas lastKnown* acima).
+// Nunca é atualizada depois de criada — é o "recibo final" da posição.
+export const closedLpPositions = pgTable(
+  "closed_lp_positions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    chain: text("chain").notNull(),
+    tokenId: text("token_id").notNull(),
+    label: text("label"),
+    token0Symbol: text("token0_symbol").notNull(),
+    token1Symbol: text("token1_symbol").notNull(),
+    openedAt: timestamp("opened_at").notNull(),
+    closedAt: timestamp("closed_at").notNull().defaultNow(),
+    entryValueToken1: doublePrecision("entry_value_token1").notNull(),
+    finalPositionValueToken1: doublePrecision("final_position_value_token1").notNull(),
+    finalFeesValueToken1: doublePrecision("final_fees_value_token1").notNull(),
+    hodlValueToken1: doublePrecision("hodl_value_token1").notNull(),
+    ilToken1: doublePrecision("il_token1").notNull(),
+    totalPnlToken1: doublePrecision("total_pnl_token1").notNull(),
+  },
+  (table) => ({
+    userIdx: index("closed_lp_positions_user_id_idx").on(table.userId),
   })
 );
 

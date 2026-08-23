@@ -20,7 +20,7 @@ import type { Signal } from "../../domain/signals/types.js";
 import { executeSignal } from "../../execution/noop-executor.js";
 import { dispatchSignal } from "../../notifications/dispatch-signal.js";
 import {
-  deleteStalePositions,
+  archiveAndDeleteStalePositions,
   getIlAlertState,
   getPositionState,
   listUserWallets,
@@ -150,7 +150,7 @@ export async function checkPositionsJob(): Promise<string> {
     // interno, por chain, cobre falhas de banco/lógica depois de já ter os
     // dados on-chain daquela chain, já com as posições de TODAS as wallets
     // do usuário juntas (reconciliação precisa ver o conjunto completo, ver
-    // comentário em deleteStalePositions abaixo).
+    // comentário em archiveAndDeleteStalePositions abaixo).
     let perChain: Awaited<ReturnType<typeof fetchPositionsForWallets>>;
     try {
       perChain = await fetchPositionsForWallets(user.addresses, activeChains);
@@ -164,12 +164,12 @@ export async function checkPositionsJob(): Promise<string> {
         // onchainPositions já vem com as posições de TODAS as wallets do
         // usuário nessa chain juntas (fetchPositionsForWallets faz o
         // merge) — importante reconciliar de uma vez só aqui: se
-        // deleteStalePositions fosse chamado wallet por wallet, a chamada
-        // da wallet A apagaria por engano as posições que só existem na
-        // wallet B do mesmo usuário.
+        // archiveAndDeleteStalePositions fosse chamado wallet por wallet, a
+        // chamada da wallet A apagaria por engano as posições que só existem
+        // na wallet B do mesmo usuário.
         const upsertInputs = onchainPositions.map((p) => toPositionUpsertInput(user.userId, chain, p));
         const upserted = await upsertPositions(upsertInputs);
-        await deleteStalePositions(
+        await archiveAndDeleteStalePositions(
           user.userId,
           chain,
           onchainPositions.map((p) => p.tokenId.toString())
