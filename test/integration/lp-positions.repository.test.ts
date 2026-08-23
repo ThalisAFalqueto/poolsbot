@@ -30,6 +30,7 @@ function makeInput(overrides: Partial<PositionUpsertInput> = {}): PositionUpsert
     userId: 1,
     chain: CHAIN,
     tokenId: "100",
+    protocol: "v3",
     poolAddress: "0x0000000000000000000000000000000000000001",
     token0Address: "0x0000000000000000000000000000000000000002",
     token1Address: "0x0000000000000000000000000000000000000003",

@@ -1,6 +1,7 @@
 import { createPublicClient, http, zeroAddress, type Address, type PublicClient } from "viem";
 import { chains, type ChainKey } from "../../config/chains.js";
 import { erc20Abi, nonfungiblePositionManagerAbi, uniswapV3FactoryAbi, uniswapV3PoolAbi } from "./abis.js";
+import { tickSpacingForFee } from "../../domain/lp-rebalance/price-math.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 
 // Um client por chain, criado sob demanda e reaproveitado — evita recriar a
@@ -139,8 +140,10 @@ export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address
         chain: chainKey,
         walletAddress: owner,
         tokenId: p.tokenId,
+        protocol: "v3",
         poolAddress,
         fee: p.fee,
+        tickSpacing: tickSpacingForFee(p.fee),
         tickLower: p.tickLower,
         tickUpper: p.tickUpper,
         currentTick,
@@ -205,6 +208,18 @@ export async function fetchUncollectedFees(
 
 export type PositionsByChain = { chain: ChainKey; positions: OnchainPosition[] };
 
+// Busca V3 e (se a chain tiver uniswapV4 configurado) V4 em paralelo e
+// junta num array só — import de client-v4.ts aqui (e client-v4.ts
+// importando getPublicClient/UncollectedFees deste arquivo) é circular de
+// propósito: os dois lados só usam o import dentro de corpo de função,
+// nunca no nível do módulo, então o ESM resolve sem problema (padrão
+// seguro, evita duplicar getPublicClient/tipos só pra quebrar o ciclo).
+async function fetchAllProtocolPositionsForWallet(chainKey: ChainKey, owner: Address): Promise<OnchainPosition[]> {
+  const { fetchV4PositionsForWallet } = await import("./client-v4.js");
+  const [v3, v4] = await Promise.all([fetchPositionsForWallet(chainKey, owner), fetchV4PositionsForWallet(chainKey, owner)]);
+  return [...v3, ...v4];
+}
+
 // Busca as posições de uma wallet em todas as chains ativas em paralelo,
 // isolando falha por chain (uma RPC fora do ar não derruba as outras) —
 // mesmo padrão de Promise.allSettled já usado em fetchUncollectedFees acima.
@@ -213,7 +228,7 @@ export async function fetchPositionsAcrossChains(
   activeChains: ChainKey[]
 ): Promise<PositionsByChain[]> {
   const settled = await Promise.allSettled(
-    activeChains.map(async (chain) => ({ chain, positions: await fetchPositionsForWallet(chain, owner) }))
+    activeChains.map(async (chain) => ({ chain, positions: await fetchAllProtocolPositionsForWallet(chain, owner) }))
   );
   return settled.flatMap((r, i) => {
     if (r.status === "fulfilled") return [r.value];

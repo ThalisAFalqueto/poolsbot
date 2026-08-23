@@ -90,7 +90,7 @@ describe("suggestVolatilityRange", () => {
     const marginFraction = computeMarginFraction(null, fee, intervalTicks);
     const margin = 20 * marginFraction;
 
-    const result = suggestVolatilityRange(intervalTicks, 100, fee, null);
+    const result = suggestVolatilityRange(intervalTicks, 100, fee, 60, null);
 
     expect(result.tickLower).toBeLessThanOrEqual(90 - margin);
     expect(result.tickUpper).toBeGreaterThanOrEqual(110 + margin);
@@ -102,8 +102,8 @@ describe("suggestVolatilityRange", () => {
     // width base grande (via currentTick bem fora dos intervalTicks) pra a
     // diferença de margem sobreviver ao arredondamento pro tickSpacing.
     const intervalTicks = [0, 0, 0, 0];
-    const narrow = suggestVolatilityRange(intervalTicks, 1000, 3000, 0.0005);
-    const wide = suggestVolatilityRange(intervalTicks, 1000, 3000, 0.02);
+    const narrow = suggestVolatilityRange(intervalTicks, 1000, 3000, 60, 0.0005);
+    const wide = suggestVolatilityRange(intervalTicks, 1000, 3000, 60, 0.02);
 
     const narrowWidth = narrow.tickUpper - narrow.tickLower;
     const wideWidth = wide.tickUpper - wide.tickLower;
@@ -112,21 +112,21 @@ describe("suggestVolatilityRange", () => {
 
   it("inclui o tick atual mesmo se estiver fora do range observado historicamente", () => {
     const intervalTicks = [90, 95, 100]; // max histórico = 100
-    const result = suggestVolatilityRange(intervalTicks, 500, 3000, null); // preço atual bem acima do observado
+    const result = suggestVolatilityRange(intervalTicks, 500, 3000, 60, null); // preço atual bem acima do observado
 
     expect(result.tickUpper).toBeGreaterThan(500);
   });
 
   it("garante largura mínima de 1 tickSpacing quando não há movimento na janela", () => {
     const intervalTicks = [100, 100, 100];
-    const result = suggestVolatilityRange(intervalTicks, 100, 3000, null);
+    const result = suggestVolatilityRange(intervalTicks, 100, 3000, 60, null);
 
     expect(result.tickUpper).toBeGreaterThan(result.tickLower);
   });
 
   it("nunca sugere além dos limites absolutos de tick", () => {
     const intervalTicks = [887000, 887272];
-    const result = suggestVolatilityRange(intervalTicks, 887272, 3000, null);
+    const result = suggestVolatilityRange(intervalTicks, 887272, 3000, 60, null);
 
     expect(result.tickUpper).toBeLessThanOrEqual(887272);
   });

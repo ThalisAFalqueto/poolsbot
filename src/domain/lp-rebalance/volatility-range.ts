@@ -1,4 +1,4 @@
-import { MAX_TICK, MIN_TICK, roundToSpacing, tickSpacingForFee } from "./price-math.js";
+import { MAX_TICK, MIN_TICK, roundToSpacing } from "./price-math.js";
 import type { SuggestedRange } from "./types.js";
 
 export type VolatilityWindow = { windowSeconds: number; checkpointCount: number };
@@ -152,9 +152,10 @@ export function suggestVolatilityRange(
   intervalTicks: number[],
   currentTick: number,
   fee: number,
+  tickSpacing: number,
   gasCostFraction: number | null
 ): SuggestedRange {
-  const spacing = tickSpacingForFee(fee);
+  const spacing = tickSpacing;
   const allTicks = [...intervalTicks, currentTick];
   const minTick = Math.min(...allTicks);
   const maxTick = Math.max(...allTicks);

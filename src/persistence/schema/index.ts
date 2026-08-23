@@ -204,6 +204,14 @@ export const lpPositions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     chain: text("chain").notNull(),
     tokenId: text("token_id").notNull(), // uint256 on-chain; texto evita overflow, mesmo padrão de poolId
+    // "v3" | "v4" — tokenId só é único DENTRO de um contrato (NPM V3 e
+    // PositionManager V4 são contratos diferentes na mesma chain, podem
+    // colidir em tokenId). Default 'v3' cobre a migração sem quebrar linhas
+    // já existentes (todas eram V3 antes do V4 existir no bot).
+    protocol: text("protocol").notNull().default("v3"),
+    // V3: endereço real do pool. V4: guarda o PoolId (bytes32) — não existe
+    // endereço de pool próprio no V4 (arquitetura singleton), ver comentário
+    // em domain/lp-rebalance/types.ts.
     poolAddress: text("pool_address").notNull(),
     token0Address: text("token0_address").notNull(),
     token1Address: text("token1_address").notNull(),
@@ -249,7 +257,7 @@ export const lpPositions = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => ({
-    tokenIdChainIdx: uniqueIndex("lp_positions_token_id_chain_idx").on(table.tokenId, table.chain),
+    tokenIdChainIdx: uniqueIndex("lp_positions_token_id_chain_idx").on(table.tokenId, table.chain, table.protocol),
     userIdx: index("lp_positions_user_id_idx").on(table.userId),
   })
 );
@@ -267,6 +275,7 @@ export const closedLpPositions = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     chain: text("chain").notNull(),
     tokenId: text("token_id").notNull(),
+    protocol: text("protocol").notNull().default("v3"), // ver lpPositions.protocol
     label: text("label"),
     token0Symbol: text("token0_symbol").notNull(),
     token1Symbol: text("token1_symbol").notNull(),

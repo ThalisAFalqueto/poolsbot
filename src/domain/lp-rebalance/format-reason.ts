@@ -34,7 +34,8 @@ function formatFee(fee: number): string {
 
 function header(position: OnchainPosition): string {
   const chainName = chains[position.chain].defillamaChainName;
-  return `${position.token0.symbol}/${position.token1.symbol} ${formatFee(position.fee)} (Uniswap V3, ${chainName})`;
+  const protocolLabel = position.protocol === "v4" ? "Uniswap V4" : "Uniswap V3";
+  return `${position.token0.symbol}/${position.token1.symbol} ${formatFee(position.fee)} (${protocolLabel}, ${chainName})`;
 }
 
 function rangeLine(position: OnchainPosition): string {

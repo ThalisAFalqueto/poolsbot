@@ -119,17 +119,24 @@ async function suggestRangeIfOutOfRange(
 
   const gasCostFraction = computeGasCostFraction(position, gasCost);
 
-  for (const { windowSeconds, checkpointCount } of VOLATILITY_WINDOWS) {
-    const secondsAgos = buildSecondsAgos(windowSeconds, checkpointCount);
-    const tickCumulatives = await fetchTickCumulatives(position.chain, position.poolAddress, secondsAgos);
-    if (tickCumulatives) {
-      const intervalTicks = intervalAverageTicks(tickCumulatives, secondsAgos);
-      const range = suggestVolatilityRange(intervalTicks, position.currentTick, position.fee, gasCostFraction);
-      return { range, source: "volatility", volatilityWindowSeconds: windowSeconds };
+  // V4 não tem o oráculo TWAP nativo (observe() virou hook opcional, ver
+  // client-v4.ts) — e position.poolAddress guarda o PoolId (32 bytes) pra
+  // posições V4, não um endereço de pool chamável (fetchTickCumulatives
+  // quebraria tentando usar isso como endereço de contrato). Pula direto
+  // pro heurístico, que é protocol-agnostic (só usa tick/tickSpacing).
+  if (position.protocol === "v3") {
+    for (const { windowSeconds, checkpointCount } of VOLATILITY_WINDOWS) {
+      const secondsAgos = buildSecondsAgos(windowSeconds, checkpointCount);
+      const tickCumulatives = await fetchTickCumulatives(position.chain, position.poolAddress, secondsAgos);
+      if (tickCumulatives) {
+        const intervalTicks = intervalAverageTicks(tickCumulatives, secondsAgos);
+        const range = suggestVolatilityRange(intervalTicks, position.currentTick, position.fee, position.tickSpacing, gasCostFraction);
+        return { range, source: "volatility", volatilityWindowSeconds: windowSeconds };
+      }
     }
   }
 
-  const range = suggestRange(position.currentTick, position.tickLower, position.tickUpper, position.fee);
+  const range = suggestRange(position.currentTick, position.tickLower, position.tickUpper, position.tickSpacing);
   return { range, source: "heuristic", volatilityWindowSeconds: null };
 }
 

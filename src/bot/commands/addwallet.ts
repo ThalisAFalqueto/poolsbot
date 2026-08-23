@@ -32,7 +32,7 @@ export async function addWalletCommand(ctx: CommandContext<Context>) {
     [
       `Wallet vinculada: ${address}${label ? ` (${label})` : ""}`,
       "",
-      `A partir do próximo ciclo (até 15min) vou monitorar suas posições de liquidez concentrada (Uniswap V3) em ${activeChainNames} e avisar se alguma sair de range.`,
+      `A partir do próximo ciclo (até 15min) vou monitorar suas posições de liquidez concentrada (Uniswap V3/V4) em ${activeChainNames} e avisar se alguma sair de range.`,
       "Use /positions pra ver agora, sem esperar, ou /wallets pra listar suas wallets vinculadas.",
     ].join("\n")
   );

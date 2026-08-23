@@ -32,6 +32,19 @@ const POLYGON_UNISWAP_V3 = {
   nonfungiblePositionManager: "0xC36442b4a4522E871399CD717aBDD847Ab11FE88",
 } as const;
 
+// Uniswap V4 usa um contrato SINGLETON (PoolManager guarda todos os pools,
+// não 1 contrato por pool como o V3) — arquitetura completamente diferente,
+// ver src/data/onchain/client-v4.ts. Só a Arbitrum tem endereço configurado
+// por enquanto (confirmado AO VIVO contra a RPC real em 23/08/2026: os 3
+// contratos abaixo concordam entre si via `.poolManager()`, não é só doc).
+// undefined nas outras chains até confirmar os endereços lá — mesma
+// disciplina do resto desse arquivo, nunca assumir portabilidade sem checar.
+const ARBITRUM_UNISWAP_V4 = {
+  poolManager: "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32",
+  positionManager: "0xd88F38F930b7952f2DB2432Cb002E7abbF3dD869",
+  stateView: "0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990",
+} as const;
+
 // viemChain tipado como Chain (não o literal específico de cada objeto de
 // viem/chains) — evita que o registry fique com N tipos de PublicClient
 // mutuamente incompatíveis (um por chain), o que quebraria getPublicClient
@@ -49,6 +62,7 @@ export const chains = {
     wethAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
     rpcUrl: env.arbitrumRpcUrl as string | undefined,
     nativeGasSymbol: "ETH",
+    uniswapV4: ARBITRUM_UNISWAP_V4 as typeof ARBITRUM_UNISWAP_V4 | undefined,
   },
   base: {
     viemChain: base as Chain,
@@ -57,6 +71,7 @@ export const chains = {
     wethAddress: "0x4200000000000000000000000000000000000006", // confirmado via teste on-chain real desta sessão
     rpcUrl: env.baseRpcUrl,
     nativeGasSymbol: "ETH",
+    uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
   },
   optimism: {
     viemChain: optimism as Chain,
@@ -68,6 +83,7 @@ export const chains = {
     wethAddress: "0x4200000000000000000000000000000000000006",
     rpcUrl: env.optimismRpcUrl,
     nativeGasSymbol: "ETH",
+    uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
   },
   polygon: {
     viemChain: polygon as Chain,
@@ -86,6 +102,7 @@ export const chains = {
     wethAddress: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
     rpcUrl: env.polygonRpcUrl,
     nativeGasSymbol: "POL",
+    uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
   },
 } as const;
 

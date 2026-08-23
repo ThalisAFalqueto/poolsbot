@@ -4,7 +4,7 @@ import { chainKeyFromDefillamaName, getActiveChains } from "../../config/chains.
 import { getPoolById, parseFeeTierLabel } from "../../data/defillama/client.js";
 import { fetchTickCumulatives, getPoolInfo } from "../../data/onchain/client.js";
 import { formatBoundaryPrice, formatPrice, formatWindowDuration } from "../../domain/lp-rebalance/format-reason.js";
-import { sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
+import { sqrtPriceX96ToPrice, tickSpacingForFee } from "../../domain/lp-rebalance/price-math.js";
 import { buildSecondsAgos, intervalAverageTicks, suggestVolatilityRange, VOLATILITY_WINDOWS } from "../../domain/lp-rebalance/volatility-range.js";
 
 // Sugestão de faixa ANTES de abrir uma posição — reaproveita a mesma
@@ -68,7 +68,7 @@ export async function rangeCommand(ctx: CommandContext<Context>) {
     if (!tickCumulatives) continue;
 
     const intervalTicks = intervalAverageTicks(tickCumulatives, secondsAgos);
-    const range = suggestVolatilityRange(intervalTicks, info.currentTick, fee, null);
+    const range = suggestVolatilityRange(intervalTicks, info.currentTick, fee, tickSpacingForFee(fee), null);
     const low = formatBoundaryPrice(range.tickLower, info.token0.decimals, info.token1.decimals);
     const high = formatBoundaryPrice(range.tickUpper, info.token0.decimals, info.token1.decimals);
 

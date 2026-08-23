@@ -1,4 +1,4 @@
-import { MAX_TICK, MIN_TICK, roundToSpacing, tickSpacingForFee } from "./price-math.js";
+import { MAX_TICK, MIN_TICK, roundToSpacing } from "./price-math.js";
 import type { SuggestedRange } from "./types.js";
 
 // Heurística: replica a MESMA LARGURA da posição atual (em ticks),
@@ -12,8 +12,8 @@ import type { SuggestedRange } from "./types.js";
 // do estado atual). Simetria é auto-contida, previsível de explicar ao
 // usuário, e não pretende ser estratégia ótima — é só uma sugestão de
 // largura equivalente; a decisão de quando/como executar é do usuário.
-export function suggestRange(currentTick: number, tickLower: number, tickUpper: number, fee: number): SuggestedRange {
-  const spacing = tickSpacingForFee(fee);
+export function suggestRange(currentTick: number, tickLower: number, tickUpper: number, tickSpacing: number): SuggestedRange {
+  const spacing = tickSpacing;
   const width = tickUpper - tickLower;
   const halfWidth = width / 2;
 

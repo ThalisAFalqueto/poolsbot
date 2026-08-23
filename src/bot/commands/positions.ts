@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import { chains, getActiveChains } from "../../config/chains.js";
 import { fetchAllPools, findUniswapV3Pool, type DefiLlamaPool } from "../../data/defillama/client.js";
 import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
+import { fetchV4UncollectedFees } from "../../data/onchain/client-v4.js";
 import { findMintGasCost } from "../../data/onchain/position-gas.js";
 import { calculateRealizedApr, type AprResult } from "../../domain/lp-rebalance/calculate-apr.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
@@ -154,7 +155,8 @@ function buildPositionBlock(
   const status = inRange ? "✅" : "🚨";
   const chainName = chains[p.chain].defillamaChainName;
   const walletTag = walletLabel ? `, ${walletLabel}` : "";
-  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} ${(p.fee / 10000).toFixed(2)}% (${chainName}${walletTag}) — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol} (#${p.tokenId})`;
+  const protocolTag = p.protocol === "v4" ? " [V4]" : "";
+  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} ${(p.fee / 10000).toFixed(2)}%${protocolTag} (${chainName}${walletTag}) — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol} (#${p.tokenId})`;
 
   const since = il.since.toLocaleDateString("pt-BR");
   const resetNote = wasReset ? " (resetado)" : "";
@@ -314,7 +316,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   const positions = perChain.flatMap((c) => c.positions);
   if (positions.length === 0) {
     const chainNames = activeChains.map((c) => chains[c].defillamaChainName).join(", ");
-    await ctx.reply(`Nenhuma posição de liquidez ativa encontrada nessas wallets (Uniswap V3) em ${chainNames}.`);
+    await ctx.reply(`Nenhuma posição de liquidez ativa encontrada nessas wallets (Uniswap V3/V4) em ${chainNames}.`);
     return;
   }
 
@@ -325,22 +327,32 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
   // deleteStalePositions aqui: reconciliação completa fica só no job, pra
   // evitar duas fontes de escrita concorrentes na mesma linha.
   //
-  // fetchUncollectedFees roda por (chain, wallet): collect() exige que
+  // fetchUncollectedFees (V3) roda por (chain, wallet): collect() exige que
   // msg.sender seja o DONO da posição, então não dá pra simular pra todas
   // as posições de uma chain de uma vez só se elas vierem de wallets
   // diferentes — precisa agrupar por wallet dentro de cada chain primeiro.
-  const [upserted, feesEntries, defillamaPools] = await Promise.all([
+  // fetchV4UncollectedFees não tem essa restrição (são chamadas view puras
+  // contra o StateView, não simulação de collect()) — roda 1x por chain,
+  // sem precisar agrupar por wallet.
+  const [upserted, feesEntries, v4FeesEntries, defillamaPools] = await Promise.all([
     upsertPositions(positions.map((p) => toPositionUpsertInput(user.id, p.chain, p))),
     Promise.all(
       perChain.flatMap(({ chain, positions: chainPositions }) => {
         const byWallet = new Map<Address, OnchainPosition[]>();
         for (const p of chainPositions) {
+          if (p.protocol !== "v3") continue;
           byWallet.set(p.walletAddress, [...(byWallet.get(p.walletAddress) ?? []), p]);
         }
         return [...byWallet.entries()].map(async ([walletAddress, walletPositions]) => {
           const fees = await fetchUncollectedFees(chain, walletAddress, walletPositions);
           return [...fees.entries()].map(([tokenId, amounts]) => [positionKey(chain, tokenId), amounts] as const);
         });
+      })
+    ),
+    Promise.all(
+      perChain.map(async ({ chain, positions: chainPositions }) => {
+        const fees = await fetchV4UncollectedFees(chain, chainPositions);
+        return [...fees.entries()].map(([tokenId, amounts]) => [positionKey(chain, tokenId), amounts] as const);
       })
     ),
     // dataset inteiro da DefiLlama (cacheado 5min em fetchAllPools) — usado
@@ -353,7 +365,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
     }),
   ]);
   const upsertedByTokenId = new Map(upserted.map((u) => [positionKey(u.chain, u.tokenId), u]));
-  const feesByTokenId = new Map(feesEntries.flat());
+  const feesByTokenId = new Map([...feesEntries.flat(), ...v4FeesEntries.flat()]);
 
   // Fora de range primeiro — é o que precisa de atenção. Com paginação isso
   // já bastaria, mas também garante que a 1ª mensagem sempre traz o que
@@ -471,7 +483,15 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         : null;
 
       const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
-      const poolStats = findUniswapV3Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address);
+      // findUniswapV3Pool casa por chain+fee+tokens — pra um par que tem
+      // pool V3 E V4 com o mesmo fee tier (achado real: WBTC/USDC 0.05% na
+      // Arbitrum tem os dois), uma posição V4 acabaria casando com o TVL/
+      // volume do pool V3 ERRADO por engano, não "indisponível". Só chama
+      // pra posições V3 mesmo — TVL/volume de V4 fica pra fase B (a
+      // DefiLlama listaria com project "uniswap-v4", precisa de um
+      // findUniswapV4Pool equivalente, não construído ainda).
+      const poolStats =
+        p.protocol === "v3" ? findUniswapV3Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address) : undefined;
       return {
         block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr, feeApr, poolStats),
         walletAddress: p.walletAddress,

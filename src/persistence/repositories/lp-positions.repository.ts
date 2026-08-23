@@ -29,6 +29,11 @@ export type PositionUpsertInput = {
   userId: number;
   chain: string;
   tokenId: string;
+  // tokenId só é único DENTRO de um contrato — o NPM V3 e o PositionManager
+  // V4 são contratos diferentes na mesma chain, podem colidir em tokenId
+  // (achado real ao dar suporte a V4). Índice único vira (tokenId, chain,
+  // protocol) em vez de só (tokenId, chain).
+  protocol: string;
   poolAddress: string;
   token0Address: string;
   token1Address: string;
@@ -55,7 +60,7 @@ export async function upsertPositions(inputs: PositionUpsertInput[]): Promise<Up
     const [existing] = await db
       .select({ id: lpPositions.id })
       .from(lpPositions)
-      .where(and(eq(lpPositions.tokenId, input.tokenId), eq(lpPositions.chain, input.chain)))
+      .where(and(eq(lpPositions.tokenId, input.tokenId), eq(lpPositions.chain, input.chain), eq(lpPositions.protocol, input.protocol)))
       .limit(1);
 
     if (existing) {
@@ -186,6 +191,7 @@ export async function archiveStalePositions(
         userId: p.userId,
         chain: p.chain,
         tokenId: p.tokenId,
+        protocol: p.protocol,
         label: p.label,
         token0Symbol: p.token0Symbol,
         token1Symbol: p.token1Symbol,
@@ -298,6 +304,7 @@ export function toPositionUpsertInput(userId: number, chain: string, p: OnchainP
     userId,
     chain,
     tokenId: p.tokenId.toString(),
+    protocol: p.protocol,
     poolAddress: p.poolAddress,
     token0Address: p.token0.address,
     token1Address: p.token1.address,
