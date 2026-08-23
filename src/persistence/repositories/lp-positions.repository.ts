@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, isNull, notInArray } from "drizzle-orm";
+import { and, desc, eq, ilike, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
 import {
   closedLpPositions,
@@ -159,66 +159,52 @@ export function hasCompleteSnapshot(
   );
 }
 
+export type CloseGasResult = { closeGasNative: number; closeGasTxHashes: string[] };
+
 // Arquiva em closed_lp_positions qualquer candidato com snapshot completo
 // (ver hasCompleteSnapshot) — sem isso, fechar uma posição apagava todo o
 // histórico dela (achado real, 21/08/2026: usuário ia fechar a posição
 // WBTC/USDC real e perder IL/fees/P&L acumulados sem nenhum rastro).
-// closeGasNative/closeGasTxHashes SEMPRE nascem null aqui — a busca de gas
-// de close (findCloseGasCost) pode levar dezenas de segundos a ~1-2min
-// (achado real: o RPC free tier só aceita 10 blocos por chamada de
-// eth_getLogs, um scan que não acha nada percorre a janela inteira), não dá
-// pra segurar a reconciliação do ciclo inteiro esperando isso — quem chama
-// dispara a busca em background e usa recordCloseGas (abaixo) pra
-// preencher depois, sem bloquear.
-export async function archiveStalePositions(candidates: StalePositionCandidate[], nativeGasSymbol: string): Promise<void> {
+// closeGasByPositionId é opcional por posição — nem toda posição tem gas de
+// close encontrado (ver findCloseGasCost), e isso não impede o arquivamento
+// do resto do P&L. Desde o upgrade da Alchemy pra Pay As You Go (range
+// ilimitado de eth_getLogs, 23/08/2026), essa busca é rápida — quem chama
+// já espera (await) o resultado antes de arquivar, sem precisar de nenhum
+// mecanismo de preenchimento posterior.
+export async function archiveStalePositions(
+  candidates: StalePositionCandidate[],
+  closeGasByPositionId: Map<number, CloseGasResult>,
+  nativeGasSymbol: string
+): Promise<void> {
   const toArchive = candidates.filter(hasCompleteSnapshot);
   if (toArchive.length === 0) return;
 
   await db.insert(closedLpPositions).values(
-    toArchive.map((p) => ({
-      userId: p.userId,
-      chain: p.chain,
-      tokenId: p.tokenId,
-      label: p.label,
-      token0Symbol: p.token0Symbol,
-      token1Symbol: p.token1Symbol,
-      token1Address: p.token1Address,
-      openedAt: p.lastKnownEntryDate,
-      entryValueToken1: p.lastKnownEntryValueToken1!,
-      finalPositionValueToken1: p.lastKnownPositionValueToken1!,
-      finalFeesValueToken1: p.lastKnownFeesValueToken1!,
-      hodlValueToken1: p.lastKnownHodlValueToken1!,
-      ilToken1: p.lastKnownIlToken1!,
-      totalPnlToken1: p.lastKnownTotalPnlToken1!,
-      mintGasNative: p.mintGasNative,
-      mintGasTxHash: p.mintGasTxHash,
-      closeGasNative: null,
-      closeGasTxHashes: null,
-      nativeGasSymbol,
-    }))
+    toArchive.map((p) => {
+      const closeGas = closeGasByPositionId.get(p.id);
+      return {
+        userId: p.userId,
+        chain: p.chain,
+        tokenId: p.tokenId,
+        label: p.label,
+        token0Symbol: p.token0Symbol,
+        token1Symbol: p.token1Symbol,
+        token1Address: p.token1Address,
+        openedAt: p.lastKnownEntryDate,
+        entryValueToken1: p.lastKnownEntryValueToken1!,
+        finalPositionValueToken1: p.lastKnownPositionValueToken1!,
+        finalFeesValueToken1: p.lastKnownFeesValueToken1!,
+        hodlValueToken1: p.lastKnownHodlValueToken1!,
+        ilToken1: p.lastKnownIlToken1!,
+        totalPnlToken1: p.lastKnownTotalPnlToken1!,
+        mintGasNative: p.mintGasNative,
+        mintGasTxHash: p.mintGasTxHash,
+        closeGasNative: closeGas?.closeGasNative ?? null,
+        closeGasTxHashes: closeGas ? closeGas.closeGasTxHashes.join(",") : null,
+        nativeGasSymbol,
+      };
+    })
   );
-}
-
-// Preenche o gas de close DEPOIS que a posição já foi arquivada — única
-// exceção ao "nunca atualizada depois de criada" documentado em
-// closed_lp_positions (ver schema/index.ts): a busca de gas de close roda
-// em background (ver comentário em archiveStalePositions acima) e só
-// resolve depois que a linha já existe. Casa por chain+tokenId+
-// closeGasNative ainda null — se a mesma posição fechou mais de uma vez ao
-// longo do tempo (mint de novo, fecha de novo), pode achar a linha errada
-// entre 2 fechamentos pendentes de gas ao mesmo tempo; aceitável (edge
-// case raro, uso real é sempre 1 posição por vez).
-export async function recordCloseGas(chain: string, tokenId: string, closeGas: { gasNative: number; txHashes: string[] }): Promise<void> {
-  await db
-    .update(closedLpPositions)
-    .set({ closeGasNative: closeGas.gasNative, closeGasTxHashes: closeGas.txHashes.join(",") })
-    .where(
-      and(
-        eq(closedLpPositions.chain, chain),
-        eq(closedLpPositions.tokenId, tokenId),
-        isNull(closedLpPositions.closeGasNative)
-      )
-    );
 }
 
 // Reconciliação: remove qualquer posição do usuário/chain cujo tokenId não

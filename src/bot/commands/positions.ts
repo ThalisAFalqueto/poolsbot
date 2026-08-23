@@ -382,17 +382,16 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
       if (record.isNew) {
         // Custo REAL de gas do mint (não estimativa) — só dá pra achar
         // aqui, na 1ª vez que o bot vê essa posição (ver findMintGasCost).
-        // NÃO é esperado (await) — dispara em background e escreve quando
-        // resolver. Achado real: o RPC free tier só aceita 10 blocos por
-        // chamada de eth_getLogs, um scan que não acha nada pode levar
-        // dezenas de segundos a ~1-2min — segurar isso aqui travaria o
-        // /positions inteiro por causa de 1 posição nova.
-        findMintGasCost(p.chain, p.tokenId)
-          .then((mintGas) => {
-            if (mintGas) return setMintGas(record.id, mintGas);
-            console.warn(`[positions] gas de mint não encontrado pra #${p.tokenId} (fora da janela de busca)`);
-          })
-          .catch((err) => console.error(`[positions] falha ao buscar gas de mint da posição #${p.tokenId}:`, err));
+        // Esperado (await) direto: com o range ilimitado da Alchemy Pay As
+        // You Go (upgrade feito 23/08/2026), essa busca é 1 chamada rápida,
+        // não precisa mais rodar em background.
+        try {
+          const mintGas = await findMintGasCost(p.chain, p.tokenId);
+          if (mintGas) await setMintGas(record.id, mintGas);
+          else console.warn(`[positions] gas de mint não encontrado pra #${p.tokenId} (fora da janela de busca)`);
+        } catch (err) {
+          console.error(`[positions] falha ao buscar gas de mint da posição #${p.tokenId}:`, err);
+        }
       }
 
       const baseline = await syncIlBaseline(record.id, {

@@ -12,13 +12,13 @@ import {
   listClosedPositions,
   listStalePositionCandidates,
   listUserWallets,
-  recordCloseGas,
   setMintGas,
   syncIlBaseline,
   updateIlAlertState,
   updatePositionSnapshot,
   updatePositionState,
   upsertPositions,
+  type CloseGasResult,
   type PositionUpsertInput,
 } from "../../src/persistence/repositories/lp-positions.repository.js";
 import { truncateAll } from "./db-helper.js";
@@ -98,12 +98,19 @@ describe("lp-positions.repository", () => {
   });
 
   // Combina os 3 passos (listar candidatos -> arquivar -> deletar) — mesmo
-  // fluxo que check-positions.job.ts orquestra de verdade. Gas de close NÃO
-  // entra aqui — nasce sempre null no arquivamento e é preenchido depois,
-  // separadamente, via recordCloseGas (ver teste dedicado abaixo).
-  async function archiveAndDelete(userId: number, chain: string, activeTokenIds: string[]) {
+  // fluxo que check-positions.job.ts orquestra de verdade (com range
+  // ilimitado de eth_getLogs desde o upgrade da Alchemy, o gas de close já
+  // é buscado ANTES de arquivar, não depois — closeGasByPositionId vazio
+  // por padrão é o caso "não achou gas de close", já coberto por
+  // hasCompleteSnapshot decidir arquivar mesmo assim).
+  async function archiveAndDelete(
+    userId: number,
+    chain: string,
+    activeTokenIds: string[],
+    closeGasByPositionId = new Map<number, CloseGasResult>()
+  ) {
     const candidates = await listStalePositionCandidates(userId, chain, activeTokenIds);
-    await archiveStalePositions(candidates, "ETH");
+    await archiveStalePositions(candidates, closeGasByPositionId, "ETH");
     await deleteStalePositions(userId, chain, activeTokenIds);
   }
 
@@ -209,68 +216,36 @@ describe("lp-positions.repository", () => {
       expect(closed[0]?.nativeGasSymbol).toBe("ETH");
     });
 
-    it("closeGasNative/closeGasTxHashes nascem null no arquivamento (preenchidos depois via recordCloseGas)", async () => {
+    it("closeGasNative/closeGasTxHashes gravados quando presentes no map, null quando ausentes", async () => {
       const user = await findOrCreateUserByTelegramChatId("chat-7");
-      const [{ id }] = await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
-      await updatePositionSnapshot(id, {
-        entryValueToken1: 100,
-        positionValueToken1: 95,
-        feesValueToken1: 3,
-        hodlValueToken1: 98,
-        ilToken1: -3,
-        totalPnlToken1: -2,
-        entryDate: new Date("2026-08-01T00:00:00Z"),
-      });
+      const [pos1, pos2] = await upsertPositions([
+        makeInput({ userId: user.id, tokenId: "1" }),
+        makeInput({ userId: user.id, tokenId: "2" }),
+      ]);
+      for (const p of [pos1!, pos2!]) {
+        await updatePositionSnapshot(p.id, {
+          entryValueToken1: 100,
+          positionValueToken1: 95,
+          feesValueToken1: 3,
+          hodlValueToken1: 98,
+          ilToken1: -3,
+          totalPnlToken1: -2,
+          entryDate: new Date("2026-08-01T00:00:00Z"),
+        });
+      }
 
-      await archiveAndDelete(user.id, CHAIN, []);
-
-      const closedBeforeGas = await listClosedPositions(user.id);
-      expect(closedBeforeGas[0]?.closeGasNative).toBeNull();
-      expect(closedBeforeGas[0]?.closeGasTxHashes).toBeNull();
-    });
-  });
-
-  describe("recordCloseGas", () => {
-    it("preenche closeGasNative/closeGasTxHashes numa posição já arquivada, casando por chain+tokenId", async () => {
-      const user = await findOrCreateUserByTelegramChatId("chat-1");
-      const [{ id }] = await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
-      await updatePositionSnapshot(id, {
-        entryValueToken1: 100,
-        positionValueToken1: 95,
-        feesValueToken1: 3,
-        hodlValueToken1: 98,
-        ilToken1: -3,
-        totalPnlToken1: -2,
-        entryDate: new Date("2026-08-01T00:00:00Z"),
-      });
-      await archiveAndDelete(user.id, CHAIN, []);
-
-      await recordCloseGas(CHAIN, "1", { gasNative: 0.0007, txHashes: ["0xa", "0xb"] });
+      const closeGasByPositionId = new Map<number, CloseGasResult>([
+        [pos1!.id, { closeGasNative: 0.0007, closeGasTxHashes: ["0xa", "0xb"] }],
+      ]);
+      await archiveAndDelete(user.id, CHAIN, [], closeGasByPositionId);
 
       const closed = await listClosedPositions(user.id);
-      expect(closed[0]?.closeGasNative).toBeCloseTo(0.0007, 10);
-      expect(closed[0]?.closeGasTxHashes).toBe("0xa,0xb");
-    });
-
-    it("não sobrescreve um closeGasNative já preenchido", async () => {
-      const user = await findOrCreateUserByTelegramChatId("chat-2");
-      const [{ id }] = await upsertPositions([makeInput({ userId: user.id, tokenId: "1" })]);
-      await updatePositionSnapshot(id, {
-        entryValueToken1: 100,
-        positionValueToken1: 95,
-        feesValueToken1: 3,
-        hodlValueToken1: 98,
-        ilToken1: -3,
-        totalPnlToken1: -2,
-        entryDate: new Date("2026-08-01T00:00:00Z"),
-      });
-      await archiveAndDelete(user.id, CHAIN, []);
-
-      await recordCloseGas(CHAIN, "1", { gasNative: 0.0007, txHashes: ["0xa"] });
-      await recordCloseGas(CHAIN, "1", { gasNative: 0.0099, txHashes: ["0xz"] }); // não deveria sobrescrever
-
-      const closed = await listClosedPositions(user.id);
-      expect(closed[0]?.closeGasNative).toBeCloseTo(0.0007, 10);
+      const closed1 = closed.find((c) => c.tokenId === "1");
+      const closed2 = closed.find((c) => c.tokenId === "2");
+      expect(closed1?.closeGasNative).toBeCloseTo(0.0007, 10);
+      expect(closed1?.closeGasTxHashes).toBe("0xa,0xb");
+      expect(closed2?.closeGasNative).toBeNull();
+      expect(closed2?.closeGasTxHashes).toBeNull();
     });
   });
 

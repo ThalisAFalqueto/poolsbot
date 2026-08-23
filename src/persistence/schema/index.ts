@@ -257,11 +257,7 @@ export const lpPositions = pgTable(
 // Registro PERMANENTE de uma posição depois que ela fecha de vez (liquidez
 // zerada, some do fetch on-chain) — sem isso, fechar uma posição apagava
 // todo o histórico dela (ver comentário nas colunas lastKnown* acima).
-// Não é atualizada depois de criada, com 1 exceção: closeGasNative/
-// closeGasTxHashes podem chegar depois via recordCloseGas — a busca de gas
-// de close roda em background (não bloqueia o arquivamento, ver
-// archiveStalePositions no repositório) e só resolve depois que a linha já
-// existe.
+// Nunca é atualizada depois de criada — é o "recibo final" da posição.
 export const closedLpPositions = pgTable(
   "closed_lp_positions",
   {

@@ -28,13 +28,13 @@ import {
   hasCompleteSnapshot,
   listStalePositionCandidates,
   listUserWallets,
-  recordCloseGas,
   setMintGas,
   syncIlBaseline,
   toPositionUpsertInput,
   updateIlAlertState,
   updatePositionState,
   upsertPositions,
+  type CloseGasResult,
 } from "../../persistence/repositories/lp-positions.repository.js";
 import { insertPriceHistory } from "../../persistence/repositories/pool-price-history.repository.js";
 
@@ -179,27 +179,28 @@ export async function checkPositionsJob(): Promise<string> {
         const activeTokenIds = onchainPositions.map((p) => p.tokenId.toString());
         const staleCandidates = await listStalePositionCandidates(user.userId, chain, activeTokenIds);
 
-        await archiveStalePositions(staleCandidates, chains[chain].nativeGasSymbol);
-        await deleteStalePositions(user.userId, chain, activeTokenIds);
-
-        // Custo REAL de gas do close (não estimativa) — disparado DEPOIS de
-        // arquivar/deletar, NÃO esperado (await): achado real, o RPC free
-        // tier só aceita 10 blocos por chamada de eth_getLogs, um scan que
-        // não acha nada pode levar dezenas de segundos a ~1-2min — segurar
-        // a reconciliação do ciclo inteiro (todos os usuários) esperando
-        // isso não vale a pena. recordCloseGas preenche a linha já
-        // arquivada quando (e se) resolver — só busca pra candidatos que
-        // de fato foram arquivados (sem snapshot completo, não tem linha
-        // em closed_lp_positions pra preencher).
+        // Custo REAL de gas do close (não estimativa) — só busca pra
+        // candidatos que de fato vão ser arquivados (sem snapshot completo,
+        // não vale gastar uma chamada RPC à toa). Com o range ilimitado da
+        // Alchemy Pay As You Go (upgrade 23/08/2026), essa busca é rápida —
+        // espera (await) direto antes de arquivar, sem precisar de
+        // background/preenchimento posterior.
+        const closeGasByPositionId = new Map<number, CloseGasResult>();
         for (const candidate of staleCandidates) {
           if (!hasCompleteSnapshot(candidate)) continue;
-          findCloseGasCost(candidate.chain as ChainKey, BigInt(candidate.tokenId))
-            .then((closeGas) => {
-              if (closeGas) return recordCloseGas(candidate.chain, candidate.tokenId, closeGas);
+          try {
+            const closeGas = await findCloseGasCost(candidate.chain as ChainKey, BigInt(candidate.tokenId));
+            if (closeGas) {
+              closeGasByPositionId.set(candidate.id, { closeGasNative: closeGas.gasNative, closeGasTxHashes: closeGas.txHashes });
+            } else {
               console.warn(`[check-positions] gas de close não encontrado pra #${candidate.tokenId}`);
-            })
-            .catch((err) => console.error(`[check-positions] falha ao buscar gas de close da posição #${candidate.tokenId}:`, err));
+            }
+          } catch (err) {
+            console.error(`[check-positions] falha ao buscar gas de close da posição #${candidate.tokenId}:`, err);
+          }
         }
+        await archiveStalePositions(staleCandidates, closeGasByPositionId, chains[chain].nativeGasSymbol);
+        await deleteStalePositions(user.userId, chain, activeTokenIds);
 
         const now = new Date();
         const upsertedByTokenId = new Map(upserted.map((u) => [u.tokenId, u]));
@@ -212,16 +213,13 @@ export async function checkPositionsJob(): Promise<string> {
           if (record.isNew) {
             // Custo REAL de gas do mint (não estimativa) — só dá pra achar
             // aqui, na 1ª vez que o bot vê essa posição (ver findMintGasCost).
-            // NÃO esperado (await) — mesmo motivo do gas de close acima:
-            // scan de log limitado a 10 blocos/chamada pode levar dezenas
-            // de segundos, não pode segurar o ciclo inteiro por causa de 1
-            // posição nova.
-            findMintGasCost(position.chain, position.tokenId)
-              .then((mintGas) => {
-                if (mintGas) return setMintGas(record.id, mintGas);
-                console.warn(`[check-positions] gas de mint não encontrado pra #${tokenId} (fora da janela de busca)`);
-              })
-              .catch((err) => console.error(`[check-positions] falha ao buscar gas de mint da posição #${tokenId}:`, err));
+            try {
+              const mintGas = await findMintGasCost(position.chain, position.tokenId);
+              if (mintGas) await setMintGas(record.id, mintGas);
+              else console.warn(`[check-positions] gas de mint não encontrado pra #${tokenId} (fora da janela de busca)`);
+            } catch (err) {
+              console.error(`[check-positions] falha ao buscar gas de mint da posição #${tokenId}:`, err);
+            }
           }
 
           const pricePoolKey = `${position.chain}:${position.poolAddress}`;
