@@ -62,6 +62,43 @@ export const nonfungiblePositionManagerAbi = [
       { name: "amount1", type: "uint256" },
     ],
   },
+  // Eventos usados só pra achar as transações de mint/close de uma posição
+  // (ver src/data/onchain/position-gas.ts) — tokenId indexado em todos,
+  // permite filtrar direto via getContractEvents sem varrer log irrelevante.
+  // mint() da Uniswap V3 NÃO emite um evento "Mint" próprio — dispara
+  // IncreaseLiquidity igual a um add de liquidez numa posição existente;
+  // quem chama distingue via o sinal isNew de upsertPositions, não pelo
+  // evento em si.
+  {
+    type: "event",
+    name: "IncreaseLiquidity",
+    inputs: [
+      { name: "tokenId", type: "uint256", indexed: true },
+      { name: "liquidity", type: "uint128", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "DecreaseLiquidity",
+    inputs: [
+      { name: "tokenId", type: "uint256", indexed: true },
+      { name: "liquidity", type: "uint128", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "Collect",
+    inputs: [
+      { name: "tokenId", type: "uint256", indexed: true },
+      { name: "recipient", type: "address", indexed: false },
+      { name: "amount0", type: "uint256", indexed: false },
+      { name: "amount1", type: "uint256", indexed: false },
+    ],
+  },
 ] as const;
 
 export const uniswapV3FactoryAbi = [

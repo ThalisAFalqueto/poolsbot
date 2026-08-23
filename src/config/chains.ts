@@ -48,6 +48,7 @@ export const chains = {
     // ressalva na entrada dela abaixo).
     wethAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
     rpcUrl: env.arbitrumRpcUrl as string | undefined,
+    nativeGasSymbol: "ETH",
   },
   base: {
     viemChain: base as Chain,
@@ -55,6 +56,7 @@ export const chains = {
     uniswapV3: BASE_UNISWAP_V3,
     wethAddress: "0x4200000000000000000000000000000000000006", // confirmado via teste on-chain real desta sessão
     rpcUrl: env.baseRpcUrl,
+    nativeGasSymbol: "ETH",
   },
   optimism: {
     viemChain: optimism as Chain,
@@ -65,6 +67,7 @@ export const chains = {
     // continua válida aqui.
     wethAddress: "0x4200000000000000000000000000000000000006",
     rpcUrl: env.optimismRpcUrl,
+    nativeGasSymbol: "ETH",
   },
   polygon: {
     viemChain: polygon as Chain,
@@ -82,6 +85,7 @@ export const chains = {
     // (oráculo externo), fora de escopo até alguém pedir.
     wethAddress: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
     rpcUrl: env.polygonRpcUrl,
+    nativeGasSymbol: "POL",
   },
 } as const;
 

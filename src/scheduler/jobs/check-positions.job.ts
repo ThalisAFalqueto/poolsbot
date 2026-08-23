@@ -1,6 +1,7 @@
 import type { Address } from "viem";
 import { chains, getActiveChains, type ChainKey } from "../../config/chains.js";
 import { fetchPositionsForWallets, fetchTickCumulatives, getGasPrice } from "../../data/onchain/client.js";
+import { findCloseGasCost, findMintGasCost } from "../../data/onchain/position-gas.js";
 import { calculateImpermanentLoss } from "../../domain/lp-rebalance/calculate-il.js";
 import { estimateRebalanceCost, type GasCostEstimate } from "../../domain/lp-rebalance/estimate-gas-cost.js";
 import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
@@ -20,10 +21,15 @@ import type { Signal } from "../../domain/signals/types.js";
 import { executeSignal } from "../../execution/noop-executor.js";
 import { dispatchSignal } from "../../notifications/dispatch-signal.js";
 import {
-  archiveAndDeleteStalePositions,
+  archiveStalePositions,
+  deleteStalePositions,
   getIlAlertState,
   getPositionState,
+  hasCompleteSnapshot,
+  listStalePositionCandidates,
   listUserWallets,
+  recordCloseGas,
+  setMintGas,
   syncIlBaseline,
   toPositionUpsertInput,
   updateIlAlertState,
@@ -150,7 +156,7 @@ export async function checkPositionsJob(): Promise<string> {
     // interno, por chain, cobre falhas de banco/lógica depois de já ter os
     // dados on-chain daquela chain, já com as posições de TODAS as wallets
     // do usuário juntas (reconciliação precisa ver o conjunto completo, ver
-    // comentário em archiveAndDeleteStalePositions abaixo).
+    // comentário sobre reconciliação abaixo).
     let perChain: Awaited<ReturnType<typeof fetchPositionsForWallets>>;
     try {
       perChain = await fetchPositionsForWallets(user.addresses, activeChains);
@@ -164,16 +170,36 @@ export async function checkPositionsJob(): Promise<string> {
         // onchainPositions já vem com as posições de TODAS as wallets do
         // usuário nessa chain juntas (fetchPositionsForWallets faz o
         // merge) — importante reconciliar de uma vez só aqui: se
-        // archiveAndDeleteStalePositions fosse chamado wallet por wallet, a
+        // a reconciliação (archive+delete) fosse chamada wallet por wallet, a
         // chamada da wallet A apagaria por engano as posições que só existem
         // na wallet B do mesmo usuário.
         const upsertInputs = onchainPositions.map((p) => toPositionUpsertInput(user.userId, chain, p));
         const upserted = await upsertPositions(upsertInputs);
-        await archiveAndDeleteStalePositions(
-          user.userId,
-          chain,
-          onchainPositions.map((p) => p.tokenId.toString())
-        );
+
+        const activeTokenIds = onchainPositions.map((p) => p.tokenId.toString());
+        const staleCandidates = await listStalePositionCandidates(user.userId, chain, activeTokenIds);
+
+        await archiveStalePositions(staleCandidates, chains[chain].nativeGasSymbol);
+        await deleteStalePositions(user.userId, chain, activeTokenIds);
+
+        // Custo REAL de gas do close (não estimativa) — disparado DEPOIS de
+        // arquivar/deletar, NÃO esperado (await): achado real, o RPC free
+        // tier só aceita 10 blocos por chamada de eth_getLogs, um scan que
+        // não acha nada pode levar dezenas de segundos a ~1-2min — segurar
+        // a reconciliação do ciclo inteiro (todos os usuários) esperando
+        // isso não vale a pena. recordCloseGas preenche a linha já
+        // arquivada quando (e se) resolver — só busca pra candidatos que
+        // de fato foram arquivados (sem snapshot completo, não tem linha
+        // em closed_lp_positions pra preencher).
+        for (const candidate of staleCandidates) {
+          if (!hasCompleteSnapshot(candidate)) continue;
+          findCloseGasCost(candidate.chain as ChainKey, BigInt(candidate.tokenId))
+            .then((closeGas) => {
+              if (closeGas) return recordCloseGas(candidate.chain, candidate.tokenId, closeGas);
+              console.warn(`[check-positions] gas de close não encontrado pra #${candidate.tokenId}`);
+            })
+            .catch((err) => console.error(`[check-positions] falha ao buscar gas de close da posição #${candidate.tokenId}:`, err));
+        }
 
         const now = new Date();
         const upsertedByTokenId = new Map(upserted.map((u) => [u.tokenId, u]));
@@ -182,6 +208,21 @@ export async function checkPositionsJob(): Promise<string> {
           const tokenId = position.tokenId.toString();
           const record = upsertedByTokenId.get(tokenId);
           if (!record) continue; // upsert falhou pra essa posição, pula (loga no próximo ciclo se persistir)
+
+          if (record.isNew) {
+            // Custo REAL de gas do mint (não estimativa) — só dá pra achar
+            // aqui, na 1ª vez que o bot vê essa posição (ver findMintGasCost).
+            // NÃO esperado (await) — mesmo motivo do gas de close acima:
+            // scan de log limitado a 10 blocos/chamada pode levar dezenas
+            // de segundos, não pode segurar o ciclo inteiro por causa de 1
+            // posição nova.
+            findMintGasCost(position.chain, position.tokenId)
+              .then((mintGas) => {
+                if (mintGas) return setMintGas(record.id, mintGas);
+                console.warn(`[check-positions] gas de mint não encontrado pra #${tokenId} (fora da janela de busca)`);
+              })
+              .catch((err) => console.error(`[check-positions] falha ao buscar gas de mint da posição #${tokenId}:`, err));
+          }
 
           const pricePoolKey = `${position.chain}:${position.poolAddress}`;
           if (!recordedPricePools.has(pricePoolKey)) {

@@ -15,6 +15,14 @@ vi.mock("../../src/data/onchain/client.js", () => ({
 vi.mock("../../src/notifications/dispatch-signal.js", () => ({
   dispatchSignal: vi.fn().mockResolvedValue(undefined),
 }));
+// null = "gas não encontrado" (mesmo contrato de uma busca real que não
+// achou nada dentro da janela) — o job já trata isso como não-fatal (loga
+// e segue); mocado à parte pra não depender do getPublicClient real, que
+// o mock de client.js acima não fornece.
+vi.mock("../../src/data/onchain/position-gas.js", () => ({
+  findMintGasCost: vi.fn().mockResolvedValue(null),
+  findCloseGasCost: vi.fn().mockResolvedValue(null),
+}));
 
 import { fetchPositionsForWallets, fetchTickCumulatives, getGasPrice } from "../../src/data/onchain/client.js";
 import { dispatchSignal } from "../../src/notifications/dispatch-signal.js";

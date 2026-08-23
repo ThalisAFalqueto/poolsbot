@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, notInArray } from "drizzle-orm";
+import { and, desc, eq, ilike, isNull, notInArray } from "drizzle-orm";
 import { db } from "../db.js";
 import {
   closedLpPositions,
@@ -108,52 +108,130 @@ export async function updatePositionSnapshot(lpPositionId: number, snapshot: Pos
     .where(eq(lpPositions.id, lpPositionId));
 }
 
-// Reconciliação: remove qualquer posição do usuário/chain cujo tokenId não
-// esteja mais no conjunto ativo on-chain (fechada ou transferida pra outra
-// wallet) — cascade limpa lp_position_state junto. ANTES de deletar, arquiva
-// em closed_lp_positions qualquer posição que tenha um snapshot conhecido
-// (ver updatePositionSnapshot) — sem isso, fechar uma posição apagava todo
-// o histórico dela (achado real, 21/08/2026: usuário ia fechar a posição
-// WBTC/USDC real e perder IL/fees/P&L acumulados sem nenhum rastro).
-export async function archiveAndDeleteStalePositions(userId: number, chain: string, activeTokenIds: string[]): Promise<void> {
+// Grava o custo REAL de gas do mint (não estimativa) — chamado 1x, no
+// momento em que upsertPositions sinaliza isNew=true (ver findMintGasCost
+// em data/onchain/position-gas.ts).
+export async function setMintGas(lpPositionId: number, mintGas: { gasNative: number; txHash: string }): Promise<void> {
+  await db
+    .update(lpPositions)
+    .set({ mintGasNative: mintGas.gasNative, mintGasTxHash: mintGas.txHash })
+    .where(eq(lpPositions.id, lpPositionId));
+}
+
+export type StalePositionCandidate = typeof lpPositions.$inferSelect;
+
+// SELECT puro (sem decidir nem escrever nada) — quem chama decide o que
+// fazer com cada candidato ANTES de arquivar/deletar. Existe separado de
+// archiveStalePositions/deleteStalePositions porque o gas de fechamento
+// precisa de uma chamada RPC (data/onchain/position-gas.ts) que não pode
+// acontecer dentro do repositório (repositório é só banco) — o chamador
+// (check-positions.job.ts) busca o gas de close PRA CADA CANDIDATO entre
+// esse SELECT e a chamada de archiveStalePositions.
+export async function listStalePositionCandidates(
+  userId: number,
+  chain: string,
+  activeTokenIds: string[]
+): Promise<StalePositionCandidate[]> {
   const staleWhere =
     activeTokenIds.length === 0
       ? and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain))
       : and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain), notInArray(lpPositions.tokenId, activeTokenIds));
 
-  const stale = await db.select().from(lpPositions).where(staleWhere);
+  return db.select().from(lpPositions).where(staleWhere);
+}
 
-  const toArchive = stale.filter(
-    (p): p is typeof p & { lastSnapshotAt: Date } =>
-      p.lastSnapshotAt !== null &&
-      p.lastKnownEntryValueToken1 !== null &&
-      p.lastKnownPositionValueToken1 !== null &&
-      p.lastKnownFeesValueToken1 !== null &&
-      p.lastKnownHodlValueToken1 !== null &&
-      p.lastKnownIlToken1 !== null &&
-      p.lastKnownTotalPnlToken1 !== null &&
-      p.lastKnownEntryDate !== null
+// Mesmo critério de "tem snapshot completo pra arquivar" de sempre —
+// exportado pra quem chama poder decidir se vale a pena gastar uma chamada
+// RPC buscando o gas de close pra esse candidato específico (sem snapshot,
+// ele não vai ser arquivado de qualquer forma).
+export function hasCompleteSnapshot(
+  p: StalePositionCandidate
+): p is StalePositionCandidate & { lastSnapshotAt: Date; lastKnownEntryDate: Date } {
+  return (
+    p.lastSnapshotAt !== null &&
+    p.lastKnownEntryValueToken1 !== null &&
+    p.lastKnownPositionValueToken1 !== null &&
+    p.lastKnownFeesValueToken1 !== null &&
+    p.lastKnownHodlValueToken1 !== null &&
+    p.lastKnownIlToken1 !== null &&
+    p.lastKnownTotalPnlToken1 !== null &&
+    p.lastKnownEntryDate !== null
   );
+}
 
-  if (toArchive.length > 0) {
-    await db.insert(closedLpPositions).values(
-      toArchive.map((p) => ({
-        userId: p.userId,
-        chain: p.chain,
-        tokenId: p.tokenId,
-        label: p.label,
-        token0Symbol: p.token0Symbol,
-        token1Symbol: p.token1Symbol,
-        openedAt: p.lastKnownEntryDate!,
-        entryValueToken1: p.lastKnownEntryValueToken1!,
-        finalPositionValueToken1: p.lastKnownPositionValueToken1!,
-        finalFeesValueToken1: p.lastKnownFeesValueToken1!,
-        hodlValueToken1: p.lastKnownHodlValueToken1!,
-        ilToken1: p.lastKnownIlToken1!,
-        totalPnlToken1: p.lastKnownTotalPnlToken1!,
-      }))
+// Arquiva em closed_lp_positions qualquer candidato com snapshot completo
+// (ver hasCompleteSnapshot) — sem isso, fechar uma posição apagava todo o
+// histórico dela (achado real, 21/08/2026: usuário ia fechar a posição
+// WBTC/USDC real e perder IL/fees/P&L acumulados sem nenhum rastro).
+// closeGasNative/closeGasTxHashes SEMPRE nascem null aqui — a busca de gas
+// de close (findCloseGasCost) pode levar dezenas de segundos a ~1-2min
+// (achado real: o RPC free tier só aceita 10 blocos por chamada de
+// eth_getLogs, um scan que não acha nada percorre a janela inteira), não dá
+// pra segurar a reconciliação do ciclo inteiro esperando isso — quem chama
+// dispara a busca em background e usa recordCloseGas (abaixo) pra
+// preencher depois, sem bloquear.
+export async function archiveStalePositions(candidates: StalePositionCandidate[], nativeGasSymbol: string): Promise<void> {
+  const toArchive = candidates.filter(hasCompleteSnapshot);
+  if (toArchive.length === 0) return;
+
+  await db.insert(closedLpPositions).values(
+    toArchive.map((p) => ({
+      userId: p.userId,
+      chain: p.chain,
+      tokenId: p.tokenId,
+      label: p.label,
+      token0Symbol: p.token0Symbol,
+      token1Symbol: p.token1Symbol,
+      token1Address: p.token1Address,
+      openedAt: p.lastKnownEntryDate,
+      entryValueToken1: p.lastKnownEntryValueToken1!,
+      finalPositionValueToken1: p.lastKnownPositionValueToken1!,
+      finalFeesValueToken1: p.lastKnownFeesValueToken1!,
+      hodlValueToken1: p.lastKnownHodlValueToken1!,
+      ilToken1: p.lastKnownIlToken1!,
+      totalPnlToken1: p.lastKnownTotalPnlToken1!,
+      mintGasNative: p.mintGasNative,
+      mintGasTxHash: p.mintGasTxHash,
+      closeGasNative: null,
+      closeGasTxHashes: null,
+      nativeGasSymbol,
+    }))
+  );
+}
+
+// Preenche o gas de close DEPOIS que a posição já foi arquivada — única
+// exceção ao "nunca atualizada depois de criada" documentado em
+// closed_lp_positions (ver schema/index.ts): a busca de gas de close roda
+// em background (ver comentário em archiveStalePositions acima) e só
+// resolve depois que a linha já existe. Casa por chain+tokenId+
+// closeGasNative ainda null — se a mesma posição fechou mais de uma vez ao
+// longo do tempo (mint de novo, fecha de novo), pode achar a linha errada
+// entre 2 fechamentos pendentes de gas ao mesmo tempo; aceitável (edge
+// case raro, uso real é sempre 1 posição por vez).
+export async function recordCloseGas(chain: string, tokenId: string, closeGas: { gasNative: number; txHashes: string[] }): Promise<void> {
+  await db
+    .update(closedLpPositions)
+    .set({ closeGasNative: closeGas.gasNative, closeGasTxHashes: closeGas.txHashes.join(",") })
+    .where(
+      and(
+        eq(closedLpPositions.chain, chain),
+        eq(closedLpPositions.tokenId, tokenId),
+        isNull(closedLpPositions.closeGasNative)
+      )
     );
-  }
+}
+
+// Reconciliação: remove qualquer posição do usuário/chain cujo tokenId não
+// esteja mais no conjunto ativo on-chain (fechada ou transferida pra outra
+// wallet) — cascade limpa lp_position_state junto. Deleta TODAS as stale
+// (arquivadas ou não em archiveStalePositions) — mesmo comportamento de
+// sempre, só separado em função própria pra caber a etapa de gas de close
+// no meio do fluxo (ver listStalePositionCandidates acima).
+export async function deleteStalePositions(userId: number, chain: string, activeTokenIds: string[]): Promise<void> {
+  const staleWhere =
+    activeTokenIds.length === 0
+      ? and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain))
+      : and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain), notInArray(lpPositions.tokenId, activeTokenIds));
 
   await db.delete(lpPositions).where(staleWhere);
 }
@@ -331,6 +409,7 @@ export type ClosedPositionRow = {
   label: string | null;
   token0Symbol: string;
   token1Symbol: string;
+  token1Address: string;
   openedAt: Date;
   closedAt: Date;
   entryValueToken1: number;
@@ -339,6 +418,11 @@ export type ClosedPositionRow = {
   hodlValueToken1: number;
   ilToken1: number;
   totalPnlToken1: number;
+  mintGasNative: number | null;
+  mintGasTxHash: string | null;
+  closeGasNative: number | null;
+  closeGasTxHashes: string | null;
+  nativeGasSymbol: string | null;
 };
 
 export async function listClosedPositions(userId: number): Promise<ClosedPositionRow[]> {
@@ -349,6 +433,7 @@ export async function listClosedPositions(userId: number): Promise<ClosedPositio
       label: closedLpPositions.label,
       token0Symbol: closedLpPositions.token0Symbol,
       token1Symbol: closedLpPositions.token1Symbol,
+      token1Address: closedLpPositions.token1Address,
       openedAt: closedLpPositions.openedAt,
       closedAt: closedLpPositions.closedAt,
       entryValueToken1: closedLpPositions.entryValueToken1,
@@ -357,6 +442,11 @@ export async function listClosedPositions(userId: number): Promise<ClosedPositio
       hodlValueToken1: closedLpPositions.hodlValueToken1,
       ilToken1: closedLpPositions.ilToken1,
       totalPnlToken1: closedLpPositions.totalPnlToken1,
+      mintGasNative: closedLpPositions.mintGasNative,
+      mintGasTxHash: closedLpPositions.mintGasTxHash,
+      closeGasNative: closedLpPositions.closeGasNative,
+      closeGasTxHashes: closedLpPositions.closeGasTxHashes,
+      nativeGasSymbol: closedLpPositions.nativeGasSymbol,
     })
     .from(closedLpPositions)
     .where(eq(closedLpPositions.userId, userId))

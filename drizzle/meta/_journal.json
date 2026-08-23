@@ -85,6 +85,13 @@
       "when": 1787498143496,
       "tag": "0011_lyrical_genesis",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787499856908,
+      "tag": "0012_neat_blizzard",
+      "breakpoints": true
     }
   ]
 }

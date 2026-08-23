@@ -3,6 +3,7 @@ import type { Address } from "viem";
 import { chains, getActiveChains } from "../../config/chains.js";
 import { fetchAllPools, findUniswapV3Pool, type DefiLlamaPool } from "../../data/defillama/client.js";
 import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
+import { findMintGasCost } from "../../data/onchain/position-gas.js";
 import { calculateRealizedApr, type AprResult } from "../../domain/lp-rebalance/calculate-apr.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
@@ -12,6 +13,7 @@ import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
 import { listWallets } from "../../persistence/repositories/user-wallets.repository.js";
 import {
+  setMintGas,
   syncIlBaseline,
   toPositionUpsertInput,
   updatePositionSnapshot,
@@ -375,6 +377,22 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
           block: `❔ ${p.token0.symbol}/${p.token1.symbol} (#${p.tokenId})\n   Indisponível: falha ao sincronizar posição.`,
           summaryEntry: null as SummaryEntry | null,
         };
+      }
+
+      if (record.isNew) {
+        // Custo REAL de gas do mint (não estimativa) — só dá pra achar
+        // aqui, na 1ª vez que o bot vê essa posição (ver findMintGasCost).
+        // NÃO é esperado (await) — dispara em background e escreve quando
+        // resolver. Achado real: o RPC free tier só aceita 10 blocos por
+        // chamada de eth_getLogs, um scan que não acha nada pode levar
+        // dezenas de segundos a ~1-2min — segurar isso aqui travaria o
+        // /positions inteiro por causa de 1 posição nova.
+        findMintGasCost(p.chain, p.tokenId)
+          .then((mintGas) => {
+            if (mintGas) return setMintGas(record.id, mintGas);
+            console.warn(`[positions] gas de mint não encontrado pra #${p.tokenId} (fora da janela de busca)`);
+          })
+          .catch((err) => console.error(`[positions] falha ao buscar gas de mint da posição #${p.tokenId}:`, err));
       }
 
       const baseline = await syncIlBaseline(record.id, {

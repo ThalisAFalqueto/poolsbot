@@ -238,6 +238,13 @@ export const lpPositions = pgTable(
     lastKnownTotalPnlToken1: doublePrecision("last_known_total_pnl_token1"),
     lastKnownEntryDate: timestamp("last_known_entry_date"),
     lastSnapshotAt: timestamp("last_snapshot_at"),
+    // Custo real de gas do mint (não estimativa) — gravado 1x, no momento
+    // em que upsertPositions sinaliza isNew=true pela 1ª vez (ver
+    // findMintGasCost em data/onchain/position-gas.ts). Nullable: posições
+    // que já existiam antes dessa coluna existir nunca terão esse dado
+    // (isNew só dispara na criação) — limitação aceita.
+    mintGasNative: doublePrecision("mint_gas_native"),
+    mintGasTxHash: text("mint_gas_tx_hash"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -250,7 +257,11 @@ export const lpPositions = pgTable(
 // Registro PERMANENTE de uma posição depois que ela fecha de vez (liquidez
 // zerada, some do fetch on-chain) — sem isso, fechar uma posição apagava
 // todo o histórico dela (ver comentário nas colunas lastKnown* acima).
-// Nunca é atualizada depois de criada — é o "recibo final" da posição.
+// Não é atualizada depois de criada, com 1 exceção: closeGasNative/
+// closeGasTxHashes podem chegar depois via recordCloseGas — a busca de gas
+// de close roda em background (não bloqueia o arquivamento, ver
+// archiveStalePositions no repositório) e só resolve depois que a linha já
+// existe.
 export const closedLpPositions = pgTable(
   "closed_lp_positions",
   {
@@ -263,6 +274,10 @@ export const closedLpPositions = pgTable(
     label: text("label"),
     token0Symbol: text("token0_symbol").notNull(),
     token1Symbol: text("token1_symbol").notNull(),
+    // Endereço de token1 (não só o símbolo) — necessário pra achar um pool
+    // WETH/token1 ao vivo na exibição (/closed), quando token1 é uma
+    // stablecoin e a chain paga gas em ETH (ver findUniswapV3Pool/getPoolInfo).
+    token1Address: text("token1_address").notNull(),
     openedAt: timestamp("opened_at").notNull(),
     closedAt: timestamp("closed_at").notNull().defaultNow(),
     entryValueToken1: doublePrecision("entry_value_token1").notNull(),
@@ -271,6 +286,16 @@ export const closedLpPositions = pgTable(
     hodlValueToken1: doublePrecision("hodl_value_token1").notNull(),
     ilToken1: doublePrecision("il_token1").notNull(),
     totalPnlToken1: doublePrecision("total_pnl_token1").notNull(),
+    // Custo real de gas (não estimativa) — no token nativo de gas da chain
+    // (ETH ou POL, ver nativeGasSymbol abaixo). Nullable: só populado
+    // quando o bot conseguiu achar as transações de mint/close dentro da
+    // janela de busca (ver position-gas.ts) — "não encontrado" é honesto,
+    // não vira 0 disfarçado.
+    mintGasNative: doublePrecision("mint_gas_native"),
+    mintGasTxHash: text("mint_gas_tx_hash"),
+    closeGasNative: doublePrecision("close_gas_native"),
+    closeGasTxHashes: text("close_gas_tx_hashes"), // hashes separados por vírgula
+    nativeGasSymbol: text("native_gas_symbol"), // "ETH" | "POL" — copiado de chains[chain] no momento do arquivamento
   },
   (table) => ({
     userIdx: index("closed_lp_positions_user_id_idx").on(table.userId),
