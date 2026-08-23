@@ -1,9 +1,10 @@
-import { encodeAbiParameters, encodePacked, keccak256, pad, toHex, type Address, type Hash } from "viem";
+import { encodeAbiParameters, encodePacked, keccak256, pad, toHex, zeroAddress, type Address, type Hash } from "viem";
 import { chains, type ChainKey } from "../../config/chains.js";
 import { calculateFeesOwedFromGrowth, decodePositionInfo } from "../../domain/lp-rebalance/position-info-v4.js";
+import { tickSpacingForFee } from "../../domain/lp-rebalance/price-math.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { erc20Abi } from "./abis.js";
-import { getPublicClient, type UncollectedFees } from "./client.js";
+import { getPublicClient, type PoolInfo, type UncollectedFees } from "./client.js";
 import { uniswapV4PositionManagerAbi, uniswapV4StateViewAbi } from "./v4-abis.js";
 
 type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
@@ -222,4 +223,64 @@ export async function fetchV4UncollectedFees(chainKey: ChainKey, positions: Onch
   });
 
   return fees;
+}
+
+// Equivalente V4 de getPoolInfo (V3, em client.ts) — usado por /range, ANTES
+// de existir qualquer posição. Diferente da leitura de uma posição existente
+// (que traz o PoolKey completo pronto via getPoolAndPositionInfo), aqui só
+// se tem tokenA/tokenB/fee (da DefiLlama) — falta tickSpacing e hooks pra
+// montar o PoolKey e calcular o PoolId. Assume o par "vanilla" mais comum:
+// tickSpacing = mesmo valor padrão do V3 pra esse fee tier, hooks = endereço
+// zero (sem hook customizado) — confirmado ao vivo (23/08/2026) que é
+// exatamente essa combinação que a posição real do usuário usa (fee 500 ->
+// tickSpacing 10, hooks zero). Se o pool de verdade usa tickSpacing/hooks
+// diferentes do padrão, o PoolId calculado aqui não bate com nenhum pool
+// real e getSlot0 falha — retorna null nesse caso (sem fingir ter achado
+// algo), quem chama decide como avisar o usuário.
+export async function getV4PoolInfo(chainKey: ChainKey, tokenA: Address, tokenB: Address, fee: number): Promise<PoolInfo | null> {
+  const v4 = chains[chainKey].uniswapV4;
+  if (!v4) return null;
+
+  // PoolKey exige currency0 < currency1 (ordem canônica por endereço) —
+  // mesma convenção que o V3 aplica dentro do próprio contrato de pool,
+  // mas aqui precisa ser feita no cliente já que estamos montando a chave.
+  const [currency0, currency1] =
+    tokenA.toLowerCase() < tokenB.toLowerCase() ? [tokenA, tokenB] : [tokenB, tokenA];
+  const poolKey: PoolKey = { currency0, currency1, fee, tickSpacing: tickSpacingForFee(fee), hooks: zeroAddress };
+  const poolId = computePoolId(poolKey);
+
+  const publicClient = getPublicClient(chainKey);
+  const slot0Result = await publicClient.readContract({
+    address: v4.stateView,
+    abi: uniswapV4StateViewAbi,
+    functionName: "getSlot0",
+    args: [poolId],
+  });
+  const [sqrtPriceX96, currentTick] = slot0Result;
+  if (sqrtPriceX96 === 0n) return null; // pool não inicializado (não existe com essa config)
+
+  const tokenResults = await publicClient.multicall({
+    contracts: [currency0, currency1].flatMap(
+      (addr) =>
+        [
+          { address: addr, abi: erc20Abi, functionName: "decimals" } as const,
+          { address: addr, abi: erc20Abi, functionName: "symbol" } as const,
+        ] as const
+    ),
+    allowFailure: true,
+  });
+  const decimals0 = tokenResults[0]?.status === "success" ? (tokenResults[0].result as number) : 18;
+  const symbol0 = tokenResults[1]?.status === "success" ? (tokenResults[1].result as string) : "???";
+  const decimals1 = tokenResults[2]?.status === "success" ? (tokenResults[2].result as number) : 18;
+  const symbol1 = tokenResults[3]?.status === "success" ? (tokenResults[3].result as string) : "???";
+
+  return {
+    // Pra V4 é o PoolId, não um endereço de contrato real — mesma convenção
+    // de OnchainPosition.poolAddress (ver types.ts).
+    poolAddress: poolId,
+    sqrtPriceX96,
+    currentTick,
+    token0: { address: currency0, decimals: decimals0, symbol: symbol0 },
+    token1: { address: currency1, decimals: decimals1, symbol: symbol1 },
+  };
 }

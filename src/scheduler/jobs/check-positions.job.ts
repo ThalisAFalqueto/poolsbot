@@ -1,7 +1,7 @@
 import type { Address } from "viem";
 import { chains, getActiveChains, type ChainKey } from "../../config/chains.js";
 import { fetchPositionsForWallets, fetchTickCumulatives, getGasPrice } from "../../data/onchain/client.js";
-import { findCloseGasCost, findMintGasCost } from "../../data/onchain/position-gas.js";
+import { findCloseGasCost, findMintGasCost, findV4CloseGasCost, findV4MintGasCost } from "../../data/onchain/position-gas.js";
 import { calculateImpermanentLoss } from "../../domain/lp-rebalance/calculate-il.js";
 import { estimateRebalanceCost, type GasCostEstimate } from "../../domain/lp-rebalance/estimate-gas-cost.js";
 import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
@@ -196,7 +196,10 @@ export async function checkPositionsJob(): Promise<string> {
         for (const candidate of staleCandidates) {
           if (!hasCompleteSnapshot(candidate)) continue;
           try {
-            const closeGas = await findCloseGasCost(candidate.chain as ChainKey, BigInt(candidate.tokenId));
+            const closeGas =
+              candidate.protocol === "v3"
+                ? await findCloseGasCost(candidate.chain as ChainKey, BigInt(candidate.tokenId))
+                : await findV4CloseGasCost(candidate.chain as ChainKey, candidate.poolAddress as `0x${string}`, BigInt(candidate.tokenId));
             if (closeGas) {
               closeGasByPositionId.set(candidate.id, { closeGasNative: closeGas.gasNative, closeGasTxHashes: closeGas.txHashes });
             } else {
@@ -221,7 +224,10 @@ export async function checkPositionsJob(): Promise<string> {
             // Custo REAL de gas do mint (não estimativa) — só dá pra achar
             // aqui, na 1ª vez que o bot vê essa posição (ver findMintGasCost).
             try {
-              const mintGas = await findMintGasCost(position.chain, position.tokenId);
+              const mintGas =
+                position.protocol === "v3"
+                  ? await findMintGasCost(position.chain, position.tokenId)
+                  : await findV4MintGasCost(position.chain, position.tokenId);
               if (mintGas) await setMintGas(record.id, mintGas);
               else console.warn(`[check-positions] gas de mint não encontrado pra #${tokenId} (fora da janela de busca)`);
             } catch (err) {

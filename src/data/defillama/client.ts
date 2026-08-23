@@ -100,8 +100,9 @@ export function parseFeeTierLabel(poolMeta: string | null): number | null {
 // aqui vai endereços on-chain->poolId da DefiLlama). Comparação
 // case-insensitive: underlyingTokens vem em minúsculas na prática, mas não
 // é garantido, e Address (viem) vem checksummed.
-export function findUniswapV3Pool(
+function findUniswapPool(
   pools: DefiLlamaPool[],
+  project: "uniswap-v3" | "uniswap-v4",
   defillamaChainName: string,
   fee: number,
   tokenA: string,
@@ -111,12 +112,37 @@ export function findUniswapV3Pool(
   const b = tokenB.toLowerCase();
   return pools.find((p) => {
     if (p.chain.toLowerCase() !== defillamaChainName.toLowerCase()) return false;
-    if (p.project !== "uniswap-v3") return false;
+    if (p.project !== project) return false;
     if (parseFeeTierLabel(p.poolMeta) !== fee) return false;
     if (!p.underlyingTokens || p.underlyingTokens.length < 2) return false;
     const addrs = p.underlyingTokens.map((t) => t.toLowerCase());
     return addrs.includes(a) && addrs.includes(b);
   });
+}
+
+export function findUniswapV3Pool(
+  pools: DefiLlamaPool[],
+  defillamaChainName: string,
+  fee: number,
+  tokenA: string,
+  tokenB: string
+): DefiLlamaPool | undefined {
+  return findUniswapPool(pools, "uniswap-v3", defillamaChainName, fee, tokenA, tokenB);
+}
+
+// Mesmo critério de findUniswapV3Pool, só trocando o project — achado real
+// (Fase A): o mesmo par pode ter pool V3 E V4 com o mesmo fee tier na
+// mesma chain (ex: WBTC/USDC 0.05% na Arbitrum), então NUNCA usar
+// findUniswapV3Pool pra uma posição V4 (casaria com os números do pool V3
+// errado) nem o inverso.
+export function findUniswapV4Pool(
+  pools: DefiLlamaPool[],
+  defillamaChainName: string,
+  fee: number,
+  tokenA: string,
+  tokenB: string
+): DefiLlamaPool | undefined {
+  return findUniswapPool(pools, "uniswap-v4", defillamaChainName, fee, tokenA, tokenB);
 }
 
 export async function searchPools(params: {

@@ -5,9 +5,11 @@
 //
 // Uniswap V4 usa 1 contrato SINGLETON (PoolManager) pra todos os pools, em
 // vez de 1 contrato por pool como o V3 — por isso não existe um
-// "uniswapV4PoolAbi" equivalente ao uniswapV3PoolAbi: o estado do pool é
-// lido via StateView (lens read-only), chaveado por PoolId (hash do
-// PoolKey), não por endereço de contrato próprio.
+// "uniswapV4PoolAbi" equivalente ao uniswapV3PoolAbi pra LEITURA de estado:
+// isso é feito via StateView (lens read-only), chaveado por PoolId (hash
+// do PoolKey), não por endereço de contrato próprio. O PoolManager só
+// entra no bot pelo lado de EVENTOS (uniswapV4PoolManagerAbi, abaixo),
+// pra achar transações de close.
 export const uniswapV4PositionManagerAbi = [
   {
     type: "function",
@@ -67,6 +69,30 @@ export const uniswapV4PositionManagerAbi = [
       { name: "from", type: "address", indexed: true },
       { name: "to", type: "address", indexed: true },
       { name: "id", type: "uint256", indexed: true },
+    ],
+  },
+] as const;
+
+// Único evento do PoolManager que o bot usa — pra achar a transação de
+// close de uma posição (ver position-gas.ts). Confirmado ao vivo contra a
+// transação real de mint da posição do usuário (23/08/2026, hash do log
+// batendo com keccak256 da assinatura calculado à mão, não suposição):
+// `sender` é SEMPRE o próprio PositionManager (não o usuário — o
+// PositionManager chama o PoolManager em nome de todo mundo, não dá pra
+// filtrar por wallet aqui), e `salt` = bytes32(tokenId), NÃO indexado —
+// só `id` (PoolId) é indexado, então a busca filtra por pool e decodifica
+// salt/tickLower/tickUpper no cliente pra achar a posição certa.
+export const uniswapV4PoolManagerAbi = [
+  {
+    type: "event",
+    name: "ModifyLiquidity",
+    inputs: [
+      { name: "id", type: "bytes32", indexed: true },
+      { name: "sender", type: "address", indexed: true },
+      { name: "tickLower", type: "int24", indexed: false },
+      { name: "tickUpper", type: "int24", indexed: false },
+      { name: "liquidityDelta", type: "int256", indexed: false },
+      { name: "salt", type: "bytes32", indexed: false },
     ],
   },
 ] as const;

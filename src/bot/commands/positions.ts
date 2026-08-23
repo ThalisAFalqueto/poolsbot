@@ -1,10 +1,10 @@
 import type { CommandContext, Context } from "grammy";
 import type { Address } from "viem";
 import { chains, getActiveChains } from "../../config/chains.js";
-import { fetchAllPools, findUniswapV3Pool, type DefiLlamaPool } from "../../data/defillama/client.js";
+import { fetchAllPools, findUniswapV3Pool, findUniswapV4Pool, type DefiLlamaPool } from "../../data/defillama/client.js";
 import { fetchPositionsForWallets, fetchUncollectedFees, type UncollectedFees } from "../../data/onchain/client.js";
 import { fetchV4UncollectedFees } from "../../data/onchain/client-v4.js";
-import { findMintGasCost } from "../../data/onchain/position-gas.js";
+import { findMintGasCost, findV4MintGasCost } from "../../data/onchain/position-gas.js";
 import { calculateRealizedApr, type AprResult } from "../../domain/lp-rebalance/calculate-apr.js";
 import { calculateImpermanentLoss, type ImpermanentLossResult } from "../../domain/lp-rebalance/calculate-il.js";
 import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculate-pnl.js";
@@ -156,7 +156,7 @@ function buildPositionBlock(
   const chainName = chains[p.chain].defillamaChainName;
   const walletTag = walletLabel ? `, ${walletLabel}` : "";
   const protocolTag = p.protocol === "v4" ? " [V4]" : "";
-  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} ${(p.fee / 10000).toFixed(2)}%${protocolTag} (${chainName}${walletTag}) — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol} (#${p.tokenId})`;
+  const headerLine = `${status} ${p.token0.symbol}/${p.token1.symbol} #${p.tokenId} ${(p.fee / 10000).toFixed(2)}%${protocolTag} (${chainName}${walletTag}) — faixa ${low}–${high}, atual ${current} ${p.token1.symbol} por ${p.token0.symbol}`;
 
   const since = il.since.toLocaleDateString("pt-BR");
   const resetNote = wasReset ? " (resetado)" : "";
@@ -398,7 +398,7 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         // You Go (upgrade feito 23/08/2026), essa busca é 1 chamada rápida,
         // não precisa mais rodar em background.
         try {
-          const mintGas = await findMintGasCost(p.chain, p.tokenId);
+          const mintGas = p.protocol === "v3" ? await findMintGasCost(p.chain, p.tokenId) : await findV4MintGasCost(p.chain, p.tokenId);
           if (mintGas) await setMintGas(record.id, mintGas);
           else console.warn(`[positions] gas de mint não encontrado pra #${p.tokenId} (fora da janela de busca)`);
         } catch (err) {
@@ -483,15 +483,15 @@ export async function positionsCommand(ctx: CommandContext<Context>) {
         : null;
 
       const walletLabel = showWalletTag ? (walletLabelByAddress.get(p.walletAddress) ?? shortAddress(p.walletAddress)) : null;
-      // findUniswapV3Pool casa por chain+fee+tokens — pra um par que tem
-      // pool V3 E V4 com o mesmo fee tier (achado real: WBTC/USDC 0.05% na
-      // Arbitrum tem os dois), uma posição V4 acabaria casando com o TVL/
-      // volume do pool V3 ERRADO por engano, não "indisponível". Só chama
-      // pra posições V3 mesmo — TVL/volume de V4 fica pra fase B (a
-      // DefiLlama listaria com project "uniswap-v4", precisa de um
-      // findUniswapV4Pool equivalente, não construído ainda).
+      // findUniswapV3Pool/findUniswapV4Pool casam por chain+fee+tokens — pra
+      // um par que tem pool V3 E V4 com o mesmo fee tier (achado real:
+      // WBTC/USDC 0.05% na Arbitrum tem os dois), usar a função errada
+      // casaria com o TVL/volume do pool errado, não "indisponível".
+      // Escolher pela protocol da própria posição, nunca as duas.
       const poolStats =
-        p.protocol === "v3" ? findUniswapV3Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address) : undefined;
+        p.protocol === "v3"
+          ? findUniswapV3Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address)
+          : findUniswapV4Pool(defillamaPools, chains[p.chain].defillamaChainName, p.fee, p.token0.address, p.token1.address);
       return {
         block: buildPositionBlock(p, il, pnl, fees, baseline.wasReset, walletLabel, apr, feeApr, poolStats),
         walletAddress: p.walletAddress,
