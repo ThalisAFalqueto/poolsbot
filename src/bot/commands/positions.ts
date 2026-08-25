@@ -169,14 +169,18 @@ function buildPositionBlock(
     fees && pnl
       ? `Fees coletáveis: ${formatAmount(fees.amount0)} ${p.token0.symbol} + ${formatAmount(fees.amount1)} ${p.token1.symbol} ≈ ${formatPrice(pnl.feesValueToken1)} ${p.token1.symbol}`
       : "Fees coletáveis: indisponível (falha ao simular collect())";
-  // "Movimento de preço" (hodlValueToken1 - entryValueToken1) foi removido
-  // daqui — é redundante com a linha de HOLD logo abaixo (que já mostra
-  // hodlValueToken1 direto) e tinha se mostrado confuso no uso real ("o
-  // usdc subiu?" — não, é o valor da cesta de entrada mudando porque o
-  // OUTRO token do par mudou de preço, não porque token1 "subiu"). Rótulo
-  // do IL agora deixa explícito "vs HOLD" pra conectar com a linha abaixo.
+  // "Movimento de preço" tinha sido removido daqui por confuso ("o usdc
+  // subiu?") — mas isso deixou o P&L total sem se reconciliar com o que
+  // aparece no texto (IL + fees ≠ P&L total: achado real, usuário fez a
+  // conta e não bateu). Volta agora como "mercado" (mesmo valor:
+  // hodlValueToken1 - entryValueToken1), só que colado na própria linha de
+  // P&L total como os 3 termos que de fato somam pro resultado — em vez de
+  // uma linha própria (que foi a parte confusa antes), aqui funciona como
+  // prova visual: mercado + IL + fees = total, sem precisar caçar números
+  // em linhas separadas e subtrair na mão.
+  const signed = (v: number) => `${v >= 0 ? "+" : ""}${formatPrice(v)}`;
   const summaryLine = pnl
-    ? `IL (posição vs HOLD): ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${pnl.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(pnl.totalPnlToken1)} ${p.token1.symbol}`
+    ? `IL (posição vs HOLD): ${(il.ilPct * 100).toFixed(2)}% (${formatPrice(pnl.ilToken1)} ${p.token1.symbol}) · P&L total (com fees): ${signed(pnl.totalPnlToken1)} ${p.token1.symbol} (mercado ${signed(pnl.priceMovementToken1)} + IL ${signed(pnl.ilToken1)} + fees ${signed(pnl.feesValueToken1)})`
     : `IL (posição vs HOLD): ${(il.ilPct * 100).toFixed(2)}% · P&L total: indisponível (fees desconhecidas)`;
 
   const holdLine = formatHoldLine(pnl, p.token1.symbol);
