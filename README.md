@@ -48,6 +48,44 @@ ssh -i ~/.ssh/oracle_poolsbot opc@<ip-da-vm> \
 
 Depois: `pm2 logs poolsbot` na VM e conferir se um ciclo completo (`ingest-pools`, `evaluate-alerts`, `check-positions`) roda limpo.
 
+### Backup do banco
+
+O banco guarda o que **não dá pra reconstruir da blockchain**: histórico de preço, posições fechadas e os baselines de IL (a âncora de todo o P&L). O código tem cópia no GitHub; o banco precisa da sua.
+
+`scripts/backup-db.sh` roda todo dia via systemd timer, faz `pg_dump`, valida o arquivo (tamanho + `pg_restore -l`, que detecta dump corrompido na hora e não seis meses depois) e envia pro Object Storage da Oracle. Mantém 30 dias de cópias locais na VM. **Se qualquer etapa falhar, manda mensagem no Telegram** — backup que quebra em silêncio é pior que não ter, porque você para de checar.
+
+Instalação (uma vez, na VM):
+
+```bash
+# 1. Bucket + PAR no console da OCI: Storage → Buckets → criar bucket →
+#    aba Management → Pre-Authenticated Requests → criar com:
+#    Target=Bucket, Access Type=Permit object writes, listing desmarcado,
+#    expiração bem distante (o padrão de 7 dias faria o backup parar sem aviso).
+#    A URL aparece UMA vez só.
+
+# 2. Guardar a PAR na VM (é segredo: dá acesso de escrita ao bucket)
+echo 'https://objectstorage.<região>.oraclecloud.com/p/.../o/' > ~/.oci-par-url
+chmod 600 ~/.oci-par-url
+
+# 3. Instalar o timer
+sudo cp ~/poolsbot/scripts/systemd/poolsbot-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now poolsbot-backup.timer
+
+# 4. Testar de verdade antes de confiar
+sudo systemctl start poolsbot-backup.service
+journalctl -u poolsbot-backup.service -n 5 --output=cat   # espera "backup OK: ..."
+```
+
+Restaurar um backup:
+
+```bash
+docker cp <arquivo>.dump poolsbot-postgres-1:/tmp/restore.dump
+docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
+  --clean --if-exists --no-owner /tmp/restore.dump
+```
+
+> A PAR é **só de escrita** de propósito: se a URL vazar, ninguém lê nem apaga os backups. O outro lado disso é que baixar um backup exige o console da OCI (ou o `oci` CLI autenticado) — a URL sozinha não serve pra restaurar.
+
 > Os scripts `pm2:*` do `package.json` agem na máquina **local**, não na VM — servem pra desenvolvimento. Rodar o bot local e o da VM ao mesmo tempo com o mesmo token quebra os dois: o Telegram só aceita um `getUpdates` por token (erro 409).
 
 ## Comandos do bot

@@ -1,0 +1,15 @@
+# Instalar em /etc/systemd/system/ na VM (ver README).
+[Unit]
+Description=Dispara o backup do banco diariamente
+
+[Timer]
+OnCalendar=daily
+# A VM pode estar desligada/reiniciando na hora marcada — Persistent roda
+# assim que ela voltar, em vez de simplesmente pular o dia.
+Persistent=true
+# Espalha o disparo numa janela de 30min pra não bater sempre no mesmo
+# instante (irrelevante com 1 máquina, mas é o padrão sensato).
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+# Instalar em /etc/systemd/system/ na VM (ver README).
+[Unit]
+Description=Backup do Postgres do poolsbot pro Object Storage
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=opc
+# Chama o bash com o script como ARGUMENTO, em vez de executar o script
+# diretamente. Não é firula: arquivos dentro de /home carregam o rótulo
+# SELinux `user_home_t`, e a política não deixa o systemd EXECUTAR nada com
+# esse rótulo a partir de um serviço — dá 203/EXEC ("Permission denied") mesmo
+# com o bit +x ligado e sem registrar AVC nenhum, o que torna o diagnóstico
+# confuso. Rodar `/bin/bash` (que é `bin_t`) e deixar o script ser só LIDO
+# contorna isso sem precisar relabelar arquivo nem afrouxar o SELinux, e
+# mantém o script versionado num lugar só (o repositório).
+ExecStart=/bin/bash /home/opc/poolsbot/scripts/backup-db.sh
