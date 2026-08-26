@@ -7,15 +7,18 @@ services:
       POSTGRES_PASSWORD: poolsbot
       POSTGRES_DB: poolsbot
     ports:
-      - "5433:5432" # 5432 já está ocupado por um Postgres nativo do sistema (systemd)
+      # 127.0.0.1 explícito (não "5433:5432", que publica em 0.0.0.0): o
+      # Docker insere as próprias regras de iptables e passa por cima do
+      # firewalld, então sem esse bind o Postgres ficaria exposto em todas as
+      # interfaces — no servidor de produção (VM Oracle Cloud) a única coisa
+      # segurando seria a security list da OCI, camada única pra um banco com
+      # senha padrão. Ninguém precisa acessar esse Postgres de fora da
+      # máquina: o bot roda no mesmo host.
+      # A porta é 5433 (e não 5432) porque na máquina de desenvolvimento a
+      # 5432 já está ocupada por um Postgres nativo do sistema (systemd).
+      - "127.0.0.1:5433:5432"
     volumes:
       - poolsbot_pgdata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
 
 volumes:
   poolsbot_pgdata:
