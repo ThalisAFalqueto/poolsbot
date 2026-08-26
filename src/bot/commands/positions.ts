@@ -11,6 +11,7 @@ import { calculatePnl, type PnlResult } from "../../domain/lp-rebalance/calculat
 import { formatBoundaryPrice, formatPrice } from "../../domain/lp-rebalance/format-reason.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
+import { TARGET_MONTHLY_PCT } from "../../domain/portfolio/target.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
 import { listWallets } from "../../persistence/repositories/user-wallets.repository.js";
 import {
@@ -27,11 +28,6 @@ import {
 function positionKey(chain: string, tokenId: bigint | string): string {
   return `${chain}:${tokenId}`;
 }
-
-// Meta declarada do usuário pro projeto (≥3%/mês) — hoje o bot é de uso
-// pessoal, então fica hardcoded; se algum dia virar multi-usuário, isso
-// precisaria virar uma preferência por usuário.
-const TARGET_MONTHLY_PCT = 0.03;
 
 const PNL_DISCLAIMER =
   "* Valores calculados desde que o poolsbot passou a monitorar cada posição (não é a abertura on-chain real). Fees são as coletáveis agora, via simulação de collect() sem gastar gas — entram no P&L total, mas não no IL isolado.";

@@ -1,6 +1,16 @@
 export const erc20Abi = [
   { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
   { type: "function", name: "symbol", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
+  // Saldo só passou a ser necessário com o NAV (patrimônio da carteira) — até
+  // então o bot lia exclusivamente posições de LP, nunca quanto de token
+  // solto a wallet tinha. Ver data/onchain/balances.ts.
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
 ] as const;
 
 export const nonfungiblePositionManagerAbi = [

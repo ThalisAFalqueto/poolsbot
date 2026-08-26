@@ -82,6 +82,32 @@ export async function upsertPositions(inputs: PositionUpsertInput[]): Promise<Up
   return results;
 }
 
+// Todo token que o usuário já teve numa pool nesta chain — ativa ou fechada.
+// É a base da allowlist que protege o NAV de airdrop de scam (ver
+// domain/portfolio/token-allowlist.ts): token que nunca passou por uma
+// posição sua não entra no patrimônio.
+export async function listKnownTokenAddresses(userId: number, chain: string): Promise<string[]> {
+  const active = await db
+    .select({ token0: lpPositions.token0Address, token1: lpPositions.token1Address })
+    .from(lpPositions)
+    .where(and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain)));
+  // closed_lp_positions só guarda token1Address (o token0 nunca foi
+  // necessário lá) — ainda assim entra, pra não perder a moeda de cotação de
+  // uma posição encerrada cujo par não existe mais entre as ativas.
+  const closed = await db
+    .select({ token1: closedLpPositions.token1Address })
+    .from(closedLpPositions)
+    .where(and(eq(closedLpPositions.userId, userId), eq(closedLpPositions.chain, chain)));
+
+  const tokens = new Set<string>();
+  for (const row of active) {
+    tokens.add(row.token0.toLowerCase());
+    tokens.add(row.token1.toLowerCase());
+  }
+  for (const row of closed) tokens.add(row.token1.toLowerCase());
+  return [...tokens];
+}
+
 export type PositionSnapshot = {
   entryValueToken1: number;
   positionValueToken1: number;

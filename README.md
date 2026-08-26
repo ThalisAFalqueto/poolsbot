@@ -99,11 +99,32 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/graph [apelido]` | gráfico da faixa + histórico de preço |
 | `/labelposition <tokenId> <nome>` | apelido pra usar no `/graph` |
 | `/closed` | posições já fechadas, com P&L final e gas |
+| `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/find`, `/yield`, `/pool` | busca e ranqueia pools (dados da DefiLlama) |
 | `/watch`, `/unwatch`, `/alerts`, `/unalert` | alertas de APY/TVL/volume |
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
 | `/status` | última execução de cada job |
+
+## Dois jeitos de medir resultado
+
+O bot mede desempenho de duas formas, que respondem a perguntas diferentes e **não devem ser somadas**:
+
+| | `/positions` | `/mes` |
+|---|---|---|
+| Escopo | uma posição | a carteira inteira |
+| Unidade | token de cotação da posição (exato) | USDC (aproximado, preço de pool) |
+| Custos | só gas de abrir/fechar | **todos** — gas, slippage, taxa de swap |
+| Capital parado | ignorado | conta, e puxa o retorno pra baixo |
+
+O `/mes` usa **diferença de patrimônio**: `nav_fim − nav_início − depósitos + saques`. A vantagem é que nenhum custo precisa ser enumerado — tudo sai de algum saldo, então já está embutido na diferença. Somar componentes (fees − gas − IL…) esquece em silêncio qualquer custo que ninguém programou.
+
+Pra isso funcionar, duas coisas são detectadas automaticamente:
+
+- **Aporte**: token que chegou numa transação que a carteira **não assinou** (quem assina é a exchange). Se a própria carteira assinou, é resultado de operação dela — swap, retirada de pool —, não dinheiro novo.
+- **Saque**: token que saiu pra um endereço **sem código** (carteira comum); pool e router são contratos.
+
+Um filtro por endereço (`trustedTokens` + tokens que já passaram por posições suas) impede que airdrop de scam entre como aporte — ele chega exatamente como um depósito legítimo.
 
 ## Estrutura
 

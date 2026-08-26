@@ -60,6 +60,22 @@ export const chains = {
     // pago em ETH — vale pra Arbitrum/Base/Optimism, NÃO pra Polygon (ver
     // ressalva na entrada dela abaixo).
     wethAddress: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+    // Moeda de conta do NAV (ver domain/portfolio/) — o patrimônio da carteira
+    // é medido NESTE token, não em "dólar": a conversão sai de pool Uniswap
+    // on-chain, nunca de oráculo externo de USD. USDC NATIVO da Arbitrum
+    // (não o USDC.e bridged, que é outro contrato). Confirmado on-chain antes
+    // de escrever aqui — name "USD Coin", symbol "USDC", 6 decimais —, não
+    // digitado de memória (ver feedback_never_type_addresses_from_memory).
+    usdcAddress: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as `0x${string}` | undefined,
+    // Tokens aceitos no patrimônio/fluxo de caixa mesmo que NUNCA tenham
+    // aparecido numa posição — tipicamente a moeda com que o usuário aporta.
+    // Achado testando com dado real: o primeiro aporte dele foi em USD₮0 e
+    // foi DESCARTADO em silêncio, porque a allowlist só conhecia tokens de
+    // posições; sem esta lista, um aporte assim vira "lucro" no /mes.
+    // Manter CURTA e por ENDEREÇO (nunca por símbolo): um token de scam pode
+    // se chamar "USDT", mas não pode forjar o endereço do contrato real.
+    // Confirmado on-chain: name/symbol "USD₮0", 6 decimais.
+    trustedTokens: ["0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"] as readonly `0x${string}`[],
     rpcUrl: env.arbitrumRpcUrl as string | undefined,
     nativeGasSymbol: "ETH",
     uniswapV4: ARBITRUM_UNISWAP_V4 as typeof ARBITRUM_UNISWAP_V4 | undefined,
@@ -69,6 +85,12 @@ export const chains = {
     defillamaChainName: "Base",
     uniswapV3: BASE_UNISWAP_V3,
     wethAddress: "0x4200000000000000000000000000000000000006", // confirmado via teste on-chain real desta sessão
+    // Sem NAV nesta chain até o endereço do USDC ser confirmado ON-CHAIN aqui
+    // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
+    // endereço entre chains). O snapshot de patrimônio simplesmente pula
+    // chains sem esse campo.
+    usdcAddress: undefined as `0x${string}` | undefined,
+    trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.baseRpcUrl,
     nativeGasSymbol: "ETH",
     uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
@@ -81,6 +103,12 @@ export const chains = {
     // Stack), gas pago em ETH nativo, assunção de estimate-gas-cost.ts
     // continua válida aqui.
     wethAddress: "0x4200000000000000000000000000000000000006",
+    // Sem NAV nesta chain até o endereço do USDC ser confirmado ON-CHAIN aqui
+    // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
+    // endereço entre chains). O snapshot de patrimônio simplesmente pula
+    // chains sem esse campo.
+    usdcAddress: undefined as `0x${string}` | undefined,
+    trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.optimismRpcUrl,
     nativeGasSymbol: "ETH",
     uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
@@ -100,6 +128,12 @@ export const chains = {
     // corrigir de verdade exigiria buscar o preço de POL em algum lugar
     // (oráculo externo), fora de escopo até alguém pedir.
     wethAddress: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+    // Sem NAV nesta chain até o endereço do USDC ser confirmado ON-CHAIN aqui
+    // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
+    // endereço entre chains). O snapshot de patrimônio simplesmente pula
+    // chains sem esse campo.
+    usdcAddress: undefined as `0x${string}` | undefined,
+    trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.polygonRpcUrl,
     nativeGasSymbol: "POL",
     uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,

@@ -382,3 +382,85 @@ export const jobStatus = pgTable("job_status", {
   lastSummary: text("last_summary"), // null se falhou antes de gerar um resumo
   lastErrorMessage: text("last_error_message"), // null quando lastSuccess = true
 });
+
+// Fotografia diária do PATRIMÔNIO da carteira (NAV), em USDC. É a base do
+// /mes: o resultado do mês sai de `nav_fim − nav_início − depósitos + saques`,
+// método que captura QUALQUER custo (gas, slippage, taxa de swap) sem precisar
+// enumerá-los — todo custo sai de algum saldo, então aparece sozinho na
+// diferença. O caminho por componentes (calculate-pnl.ts) continua existindo e
+// é EXATO em token1; este aqui é aproximado por construção, porque converte
+// tudo pra USDC a preço de pool do instante da foto (ver data/onchain/
+// token-price.ts). Não misturar os dois números sem essa ressalva.
+//
+// Escrito 1x por dia pelo snapshot-nav.job (que sai cedo se já houver linha
+// de hoje, pra não gastar RPC nos outros 95 ciclos de 15min do dia).
+// As parcelas ficam em colunas próprias, não só o total, pra o /mes conseguir
+// mostrar quanto do capital está parado — que é justamente o que o
+// /positions, por olhar só a posição, não revela.
+export const walletNavSnapshots = pgTable(
+  "wallet_nav_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    walletAddress: text("wallet_address").notNull(),
+    chain: text("chain").notNull(),
+    date: date("date").notNull(), // UTC — fronteira de mês do /mes é UTC, não horário local
+    navUsdc: doublePrecision("nav_usdc").notNull(),
+    idleUsdc: doublePrecision("idle_usdc").notNull(), // tokens soltos + reserva de gas
+    positionsUsdc: doublePrecision("positions_usdc").notNull(),
+    feesUsdc: doublePrecision("fees_usdc").notNull(), // fees ainda não coletadas
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    walletDateIdx: uniqueIndex("wallet_nav_snapshots_wallet_date_idx").on(
+      table.userId,
+      table.walletAddress,
+      table.chain,
+      table.date
+    ),
+  })
+);
+
+export const cashFlowDirectionEnum = pgEnum("cash_flow_direction", ["deposit", "withdrawal"]);
+
+// Entradas e saídas de capital da carteira. Sem isso o NAV mente: você
+// deposita R$100 e o bot lê como lucro.
+//
+// Como são detectados (regra validada ao vivo contra as transferências reais
+// do usuário): chegou token numa transação que a carteira NÃO assinou =
+// depósito (quem manda é a exchange). Se a própria carteira assinou, é
+// resultado de operação dela (swap, retirada de pool) e não é dinheiro novo.
+// Pro saque, o espelho: saiu token pra um endereço SEM código (carteira
+// comum) — pool e router são contratos. A regra de saque ainda não tem
+// exemplo real pra validar (o usuário nunca sacou), é a parte mais frágil.
+//
+// `uniqueId` é o id que a Alchemy dá pra cada transferência — chave natural
+// de dedup, já que o job relê janelas sobrepostas.
+export const walletCashFlows = pgTable(
+  "wallet_cash_flows",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    walletAddress: text("wallet_address").notNull(),
+    chain: text("chain").notNull(),
+    uniqueId: text("unique_id").notNull(),
+    direction: cashFlowDirectionEnum("direction").notNull(),
+    asset: text("asset").notNull(),
+    amount: doublePrecision("amount").notNull(),
+    // Valorado no preço do MOMENTO DA DETECÇÃO (o job roda diariamente), não
+    // no instante exato da transação — aproximação assumida. Só existe
+    // porque o P&L precisa somar fluxos de moedas diferentes.
+    valueUsdc: doublePrecision("value_usdc").notNull(),
+    txHash: text("tx_hash").notNull(),
+    occurredAt: timestamp("occurred_at").notNull(),
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    uniqueIdIdx: uniqueIndex("wallet_cash_flows_unique_id_idx").on(table.uniqueId),
+    userOccurredAtIdx: index("wallet_cash_flows_user_occurred_at_idx").on(table.userId, table.occurredAt),
+  })
+);

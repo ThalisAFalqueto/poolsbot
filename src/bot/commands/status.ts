@@ -8,11 +8,12 @@ const JOB_LABELS: Record<string, string> = {
   "ingest-pools": "Ingestão de pools",
   "evaluate-alerts": "Avaliação de alertas",
   "check-positions": "Checagem de posições de LP",
+  "snapshot-nav": "Foto do patrimônio (diária)",
 };
 
 // Ordem fixa (não a ordem de retorno do banco) pra sempre aparecer na mesma
 // sequência em que os jobs rodam no ciclo — mais fácil de acompanhar.
-const JOB_ORDER = ["ingest-pools", "evaluate-alerts", "check-positions"];
+const JOB_ORDER = ["ingest-pools", "evaluate-alerts", "check-positions", "snapshot-nav"];
 
 function formatRelativeTime(date: Date, now: Date): string {
   const diffMs = now.getTime() - date.getTime();
