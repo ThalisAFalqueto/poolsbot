@@ -74,9 +74,11 @@ function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: number | nul
   const opened = row.openedAt.toLocaleDateString("pt-BR");
   const closed = row.closedAt.toLocaleDateString("pt-BR");
   const vsHold = row.ilToken1 + row.finalFeesValueToken1;
+  // Mesma convenção do /positions: só marca o V4, já que V3 é o caso comum.
+  const protocolTag = row.protocol === "v4" ? " [V4]" : "";
 
   return [
-    `${row.token0Symbol}/${row.token1Symbol} (${name}) — ${opened} a ${closed}`,
+    `${row.token0Symbol}/${row.token1Symbol}${protocolTag} (${name}) — ${opened} a ${closed}`,
     `   Entrada: ${formatPrice(row.entryValueToken1)} ${row.token1Symbol} · Final: ${formatPrice(row.finalPositionValueToken1)} ${row.token1Symbol} · Fees: ${formatPrice(row.finalFeesValueToken1)} ${row.token1Symbol}`,
     `   P&L total (com fees): ${row.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(row.totalPnlToken1)} ${row.token1Symbol} · vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${row.token1Symbol}`,
     `   ${formatGasLine(row, ethPriceInToken1)}`,

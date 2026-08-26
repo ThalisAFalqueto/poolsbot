@@ -18,6 +18,7 @@ import {
   updatePositionSnapshot,
   updatePositionState,
   upsertPositions,
+  type ActivePositionKey,
   type CloseGasResult,
   type PositionUpsertInput,
 } from "../../src/persistence/repositories/lp-positions.repository.js";
@@ -104,15 +105,19 @@ describe("lp-positions.repository", () => {
   // é buscado ANTES de arquivar, não depois — closeGasByPositionId vazio
   // por padrão é o caso "não achou gas de close", já coberto por
   // hasCompleteSnapshot decidir arquivar mesmo assim).
+  // Aceita tokenId cru ("1") como atalho — vira uma chave {tokenId, protocol}
+  // com o protocolo padrão do fixture (v3), que é o caso da maioria dos
+  // testes. Quem precisa exercitar a colisão V3/V4 passa a chave completa.
   async function archiveAndDelete(
     userId: number,
     chain: string,
-    activeTokenIds: string[],
+    active: (string | ActivePositionKey)[],
     closeGasByPositionId = new Map<number, CloseGasResult>()
   ) {
-    const candidates = await listStalePositionCandidates(userId, chain, activeTokenIds);
+    const activeKeys: ActivePositionKey[] = active.map((a) => (typeof a === "string" ? { tokenId: a, protocol: "v3" } : a));
+    const candidates = await listStalePositionCandidates(userId, chain, activeKeys);
     await archiveStalePositions(candidates, closeGasByPositionId, "ETH");
-    await deleteStalePositions(userId, chain, activeTokenIds);
+    await deleteStalePositions(userId, chain, activeKeys);
   }
 
   describe("listStalePositionCandidates / archiveStalePositions / deleteStalePositions", () => {
@@ -127,6 +132,25 @@ describe("lp-positions.repository", () => {
 
       const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_positions`);
       expect(Number(count.rows[0]?.count)).toBe(1);
+    });
+
+    // Bug real (achado em auditoria, 26/08/2026): a staleness era casada só
+    // por tokenId, então uma posição V4 ATIVA com o mesmo número "protegia"
+    // uma V3 já fechada — que nunca era arquivada nem removida, ficando presa
+    // no banco pra sempre. tokenId só é único DENTRO de um contrato.
+    it("mesmo tokenId em V3 e V4: fechar só a V3 não pode ser mascarado pela V4 ativa", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-1");
+      await upsertPositions([
+        makeInput({ userId: user.id, tokenId: "198755", protocol: "v3" }),
+        makeInput({ userId: user.id, tokenId: "198755", protocol: "v4" }),
+      ]);
+
+      // só a V4 continua ativa on-chain; a V3 homônima foi fechada
+      await archiveAndDelete(user.id, CHAIN, [{ tokenId: "198755", protocol: "v4" }]);
+
+      const remaining = await db.execute<{ protocol: string }>(sql`SELECT protocol FROM lp_positions`);
+      expect(remaining.rows).toHaveLength(1);
+      expect(remaining.rows[0]?.protocol).toBe("v4"); // a V3 fechada saiu, a V4 ativa ficou
     });
 
     it("lista de tokenIds ativos vazia remove todas as posições do usuário/chain", async () => {

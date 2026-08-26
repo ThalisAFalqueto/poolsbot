@@ -183,8 +183,11 @@ export async function checkPositionsJob(): Promise<string> {
         const upsertInputs = onchainPositions.map((p) => toPositionUpsertInput(user.userId, chain, p));
         const upserted = await upsertPositions(upsertInputs);
 
-        const activeTokenIds = onchainPositions.map((p) => p.tokenId.toString());
-        const staleCandidates = await listStalePositionCandidates(user.userId, chain, activeTokenIds);
+        // Chave composta (tokenId + protocol), não só tokenId: os dois
+        // protocolos numeram tokenId de forma independente e podem colidir
+        // (ver ActivePositionKey no repositório).
+        const activeKeys = onchainPositions.map((p) => ({ tokenId: p.tokenId.toString(), protocol: p.protocol }));
+        const staleCandidates = await listStalePositionCandidates(user.userId, chain, activeKeys);
 
         // Custo REAL de gas do close (não estimativa) — só busca pra
         // candidatos que de fato vão ser arquivados (sem snapshot completo,
@@ -210,7 +213,7 @@ export async function checkPositionsJob(): Promise<string> {
           }
         }
         await archiveStalePositions(staleCandidates, closeGasByPositionId, chains[chain].nativeGasSymbol);
-        await deleteStalePositions(user.userId, chain, activeTokenIds);
+        await deleteStalePositions(user.userId, chain, activeKeys);
 
         const now = new Date();
         const upsertedByTokenId = new Map(upserted.map((u) => [u.tokenId, u]));

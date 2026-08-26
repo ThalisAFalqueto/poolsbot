@@ -15,11 +15,17 @@ export async function labelPositionCommand(ctx: CommandContext<Context>) {
   }
 
   const user = await findOrCreateUserByTelegramChatId(String(ctx.chat.id));
-  const updated = await setPositionLabel(user.id, tokenId, label);
+  const updatedCount = await setPositionLabel(user.id, tokenId, label);
 
-  await ctx.reply(
-    updated
-      ? `Posição #${tokenId} agora responde por "${label}" (ex: /graph ${label}).`
-      : `Não achei a posição #${tokenId} vinculada a você — use /positions pra conferir o tokenId certo.`
-  );
+  if (updatedCount === 0) {
+    await ctx.reply(`Não achei a posição #${tokenId} vinculada a você — use /positions pra conferir o tokenId certo.`);
+    return;
+  }
+
+  // tokenId não é único sozinho (repete entre chains e entre V3/V4) — quando
+  // bate em mais de uma, avisa em vez de deixar o usuário achar que rotulou só
+  // a que ele tinha em mente.
+  const ambiguityNote =
+    updatedCount > 1 ? ` ATENÇÃO: ${updatedCount} posições suas têm esse mesmo tokenId (chains/protocolos diferentes) e todas receberam o apelido.` : "";
+  await ctx.reply(`Posição #${tokenId} agora responde por "${label}" (ex: /graph ${label}).${ambiguityNote}`);
 }

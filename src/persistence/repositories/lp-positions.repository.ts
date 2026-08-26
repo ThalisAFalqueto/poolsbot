@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, notInArray } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, not, or, type SQL } from "drizzle-orm";
 import { db } from "../db.js";
 import {
   closedLpPositions,
@@ -125,6 +125,27 @@ export async function setMintGas(lpPositionId: number, mintGas: { gasNative: num
 
 export type StalePositionCandidate = typeof lpPositions.$inferSelect;
 
+// Identidade COMPLETA de uma posição dentro de uma chain. tokenId sozinho não
+// basta: ele só é único DENTRO de um contrato, e o NPM do V3 e o
+// PositionManager do V4 numeram de forma independente (mesma razão de o índice
+// único ser (tokenId, chain, protocol), ver schema/index.ts).
+export type ActivePositionKey = { tokenId: string; protocol: string };
+
+// Casar staleness só por tokenId (como era antes) deixava uma posição ATIVA de
+// um protocolo "proteger" uma posição JÁ FECHADA do outro protocolo com o
+// mesmo tokenId: ela nunca seria detectada como stale, nunca seria arquivada
+// em closed_lp_positions e ficaria pra sempre no banco. Comparar o par
+// (tokenId, protocol) elimina isso.
+function stalePositionsWhere(userId: number, chain: string, active: ActivePositionKey[]): SQL | undefined {
+  const scope = and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain));
+  if (active.length === 0) return scope; // nada ativo on-chain: tudo que estiver no banco é stale
+
+  const matchesSomeActive = or(
+    ...active.map((p) => and(eq(lpPositions.tokenId, p.tokenId), eq(lpPositions.protocol, p.protocol)))
+  );
+  return and(scope, not(matchesSomeActive!));
+}
+
 // SELECT puro (sem decidir nem escrever nada) — quem chama decide o que
 // fazer com cada candidato ANTES de arquivar/deletar. Existe separado de
 // archiveStalePositions/deleteStalePositions porque o gas de fechamento
@@ -135,14 +156,9 @@ export type StalePositionCandidate = typeof lpPositions.$inferSelect;
 export async function listStalePositionCandidates(
   userId: number,
   chain: string,
-  activeTokenIds: string[]
+  active: ActivePositionKey[]
 ): Promise<StalePositionCandidate[]> {
-  const staleWhere =
-    activeTokenIds.length === 0
-      ? and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain))
-      : and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain), notInArray(lpPositions.tokenId, activeTokenIds));
-
-  return db.select().from(lpPositions).where(staleWhere);
+  return db.select().from(lpPositions).where(stalePositionsWhere(userId, chain, active));
 }
 
 // Mesmo critério de "tem snapshot completo pra arquivar" de sempre —
@@ -219,58 +235,66 @@ export async function archiveStalePositions(
 // (arquivadas ou não em archiveStalePositions) — mesmo comportamento de
 // sempre, só separado em função própria pra caber a etapa de gas de close
 // no meio do fluxo (ver listStalePositionCandidates acima).
-export async function deleteStalePositions(userId: number, chain: string, activeTokenIds: string[]): Promise<void> {
-  const staleWhere =
-    activeTokenIds.length === 0
-      ? and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain))
-      : and(eq(lpPositions.userId, userId), eq(lpPositions.chain, chain), notInArray(lpPositions.tokenId, activeTokenIds));
-
-  await db.delete(lpPositions).where(staleWhere);
+export async function deleteStalePositions(userId: number, chain: string, active: ActivePositionKey[]): Promise<void> {
+  await db.delete(lpPositions).where(stalePositionsWhere(userId, chain, active));
 }
 
 // Escreve o apelido — ÚNICO lugar que deveria tocar essa coluna (ver
 // comentário em schema/index.ts sobre por que não pode entrar em
-// PositionUpsertInput). Não desambigua por chain se o mesmo tokenId
-// existir em mais de uma chain do mesmo usuário — atualiza todas as que
-// baterem; aceitável hoje (uso real é só Arbitrum).
-export async function setPositionLabel(userId: number, tokenId: string, label: string): Promise<boolean> {
+// PositionUpsertInput). O identificador que o usuário digita é só o tokenId,
+// que NÃO é único sozinho (pode repetir entre chains e entre protocolos V3/V4
+// — ver ActivePositionKey acima), então atualiza todas as linhas que baterem e
+// devolve QUANTAS foram: quem chama avisa o usuário quando for mais de uma, em
+// vez de fingir que rotulou exatamente a que ele queria.
+export async function setPositionLabel(userId: number, tokenId: string, label: string): Promise<number> {
   const updated = await db
     .update(lpPositions)
     .set({ label, updatedAt: new Date() })
     .where(and(eq(lpPositions.userId, userId), eq(lpPositions.tokenId, tokenId)))
     .returning({ id: lpPositions.id });
-  return updated.length > 0;
+  return updated.length;
 }
 
-export type PositionRef = { id: number; tokenId: string; chain: string };
+export type PositionRef = { id: number; tokenId: string; chain: string; protocol: string };
+
+const POSITION_REF_COLS = {
+  id: lpPositions.id,
+  tokenId: lpPositions.tokenId,
+  chain: lpPositions.chain,
+  protocol: lpPositions.protocol,
+};
 
 // Tenta achar por apelido primeiro (case-insensitive), senão trata o
 // identificador como tokenId cru. null se não achar dos dois jeitos.
+// `orderBy(id)` não é decoração: sem ordem explícita, um identificador ambíguo
+// (mesmo tokenId em 2 chains, ou em V3 e V4) faria o Postgres devolver
+// qualquer uma das linhas, e o /graph podia plotar uma posição diferente a
+// cada chamada com o mesmo comando. Com a ordem fixa, pelo menos é sempre a
+// mesma (a mais antiga) — e `protocol` volta junto pra quem chama poder
+// mostrar de qual se trata.
 export async function findPositionByLabelOrTokenId(userId: number, identifier: string): Promise<PositionRef | null> {
-  const cols = { id: lpPositions.id, tokenId: lpPositions.tokenId, chain: lpPositions.chain };
   const [byLabel] = await db
-    .select(cols)
+    .select(POSITION_REF_COLS)
     .from(lpPositions)
     .where(and(eq(lpPositions.userId, userId), ilike(lpPositions.label, identifier)))
+    .orderBy(asc(lpPositions.id))
     .limit(1);
   if (byLabel) return byLabel;
 
   const [byTokenId] = await db
-    .select(cols)
+    .select(POSITION_REF_COLS)
     .from(lpPositions)
     .where(and(eq(lpPositions.userId, userId), eq(lpPositions.tokenId, identifier)))
+    .orderBy(asc(lpPositions.id))
     .limit(1);
   return byTokenId ?? null;
 }
 
-// Lista todas as posições do usuário (id, tokenId, chain) — usado por
-// /graph sem argumento, pra decidir entre "usa a única" e "pede pra
-// especificar" sem precisar de outra função inteira só pra contar.
+// Lista todas as posições do usuário — usado por /graph sem argumento, pra
+// decidir entre "usa a única" e "pede pra especificar" sem precisar de outra
+// função inteira só pra contar.
 export async function listPositionRefs(userId: number): Promise<PositionRef[]> {
-  return db
-    .select({ id: lpPositions.id, tokenId: lpPositions.tokenId, chain: lpPositions.chain })
-    .from(lpPositions)
-    .where(eq(lpPositions.userId, userId));
+  return db.select(POSITION_REF_COLS).from(lpPositions).where(eq(lpPositions.userId, userId)).orderBy(asc(lpPositions.id));
 }
 
 export async function getPositionState(lpPositionId: number): Promise<PositionState> {
@@ -399,6 +423,7 @@ export async function updateIlAlertState(lpPositionId: number, next: IlAlertStat
 export type ClosedPositionRow = {
   chain: string;
   tokenId: string;
+  protocol: string;
   label: string | null;
   token0Symbol: string;
   token1Symbol: string;
@@ -423,6 +448,7 @@ export async function listClosedPositions(userId: number): Promise<ClosedPositio
     .select({
       chain: closedLpPositions.chain,
       tokenId: closedLpPositions.tokenId,
+      protocol: closedLpPositions.protocol,
       label: closedLpPositions.label,
       token0Symbol: closedLpPositions.token0Symbol,
       token1Symbol: closedLpPositions.token1Symbol,
