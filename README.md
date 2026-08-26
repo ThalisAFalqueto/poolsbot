@@ -48,9 +48,12 @@ ssh -i ~/.ssh/oracle_poolsbot opc@<ip-da-vm> \
 
 Depois: `pm2 logs poolsbot` na VM e conferir se um ciclo completo (`ingest-pools`, `evaluate-alerts`, `check-positions`) roda limpo.
 
-### Backup do banco
+### Backups
 
-O banco guarda o que **não dá pra reconstruir da blockchain**: histórico de preço, posições fechadas e os baselines de IL (a âncora de todo o P&L). O código tem cópia no GitHub; o banco precisa da sua.
+Duas coisas precisam sobreviver à perda da VM, e cada uma tem uma cópia própria:
+
+- **Código**: este repositório, num GitHub privado. `git push` depois de commitar.
+- **Banco**: dump diário no Object Storage da Oracle (abaixo). É o que **não dá pra reconstruir da blockchain** — histórico de preço, posições fechadas e os baselines de IL, que ancoram todo o P&L.
 
 `scripts/backup-db.sh` roda todo dia via systemd timer, faz `pg_dump`, valida o arquivo (tamanho + `pg_restore -l`, que detecta dump corrompido na hora e não seis meses depois) e envia pro Object Storage da Oracle. Mantém 30 dias de cópias locais na VM. **Se qualquer etapa falhar, manda mensagem no Telegram** — backup que quebra em silêncio é pior que não ter, porque você para de checar.
 
@@ -112,10 +115,14 @@ src/
   data/         adaptadores externos: RPC (viem), DefiLlama, Dune, matplotlib
   persistence/  schema e repositórios (Drizzle + Postgres)
   scheduler/    jobs de 15min (ingestão, alertas, posições)
-  scripts/      backfills pontuais, rodados à mão
+  scripts/      backfills pontuais em TS, rodados à mão (via Dune)
+scripts/        ferramental fora do Node: plot_range.py (o /graph),
+                backup-db.sh e as units de systemd que o agendam
 contracts/      RebalanceController.sol (Foundry) — rascunho de testnet,
                 NÃO auditado, NÃO usado pelo bot
 ```
+
+> São dois `scripts/` diferentes: `src/scripts/` é TypeScript rodado pelo `tsx` (backfills); o `scripts/` da raiz é o que não é Node (Python e shell).
 
 `domain/` não importa nada de `data/` nem de `persistence/` — é o que deixa a matemática testável sem RPC nem banco (`test/domain`). Testes de integração sobem um Postgres de verdade (porta 5433, banco `poolsbot_test`); `test/onchain` bate em RPC real e por isso fica fora da suíte padrão.
 
