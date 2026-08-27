@@ -7,6 +7,8 @@ import { getV4PoolInfo } from "../../data/onchain/client-v4.js";
 import { formatBoundaryPrice, formatPrice, formatWindowDuration } from "../../domain/lp-rebalance/format-reason.js";
 import { sqrtPriceX96ToPrice, tickSpacingForFee, tickToPrice } from "../../domain/lp-rebalance/price-math.js";
 import { buildSecondsAgos, intervalAverageTicks, suggestVolatilityRange, VOLATILITY_WINDOWS } from "../../domain/lp-rebalance/volatility-range.js";
+import { estimateVolatility, rangeForHorizon } from "../../domain/lp-rebalance/range-from-history.js";
+import { getPriceHistorySince } from "../../persistence/repositories/pool-price-history.repository.js";
 
 // Sugestão de faixa ANTES de abrir uma posição — reaproveita a mesma
 // calibração por volatilidade real (oráculo TWAP) usada no job automático
@@ -17,6 +19,12 @@ import { buildSecondsAgos, intervalAverageTicks, suggestVolatilityRange, VOLATIL
 // de gas usado na margem (ver computeMarginFraction em volatility-range.ts)
 // é o valor de REFERÊNCIA, não o seu real — ele depende do tamanho da
 // posição, que ainda não existe.
+/** Janela lida do banco. 60 dias cobrem bem mais que o oráculo de qualquer
+ *  pool e ainda são recentes o bastante pra refletir o regime atual. */
+const HISTORY_LOOKBACK_DAYS = 60;
+/** Horizontes oferecidos — 1 dia (surf), 3 dias e 1 semana. */
+const HORIZONS_DAYS = [1, 3, 7];
+
 export async function rangeCommand(ctx: CommandContext<Context>) {
   const poolId = ctx.match?.toString().trim();
   if (!poolId) {
@@ -68,6 +76,55 @@ export async function rangeCommand(ctx: CommandContext<Context>) {
   const disclaimer =
     "Isso NÃO considera o tamanho da posição que você vai abrir (a margem usa um custo de gas de referência, não o seu real, que só existe depois que a posição é criada) — é um ponto de partida, não a palavra final. Depois de abrir, use /addwallet e /positions pra monitorar de verdade.";
 
+  // FONTE PRIMÁRIA: o histórico que o próprio bot guarda (backfill + ingestão
+  // de 15min). O oráculo do pool só entra como último recurso, e a razão é
+  // metodológica, não de conveniência: o buffer dele tem tamanho fixo, então
+  // pool muito negociado guarda MENOS tempo — a janela acabava sendo escolhida
+  // por disponibilidade, não por qualidade, e quanto mais o preço se movia,
+  // mais estreita saía a faixa. Ver domain/lp-rebalance/range-from-history.ts.
+  // Junta o histórico de TODOS os pools do mesmo par nesta chain (V3 e V4).
+  // Não é otimização: é correção de viés. As séries são o MESMO preço — a
+  // arbitragem mantém os pools alinhados (verificado: em 23/08 ambos marcavam
+  // ~$77,2k) — e usar só a de um pool faz a amostra depender de qual deles o
+  // bot acompanhou por mais tempo. Sem juntar, o mesmo par dava volatilidade
+  // de 1,87%/dia pelo V3 (33 dias) e 1,05% pelo V4 (4 dias), produzindo faixas
+  // de 6,7% e 3,7% pro mesmo horizonte. Duas respostas diferentes pra mesma
+  // pergunta, decididas por acaso de amostragem.
+  const historySince = new Date(Date.now() - HISTORY_LOOKBACK_DAYS * 86400000);
+  const [v3Pool, v4Pool] = await Promise.all([
+    getPoolInfo(chainKey, tokenA, tokenB, fee).catch(() => null),
+    getV4PoolInfo(chainKey, tokenA, tokenB, fee).catch(() => null),
+  ]);
+  const poolAddresses = [...new Set([v3Pool?.poolAddress, v4Pool?.poolAddress, info.poolAddress].filter(Boolean))] as string[];
+  const histories = await Promise.all(poolAddresses.map((addr) => getPriceHistorySince(chainKey, addr, historySince)));
+  const history = histories.flat();
+  const estimate = estimateVolatility(history);
+
+  if (estimate) {
+    const linhas = HORIZONS_DAYS.map((dias) => {
+      const r = rangeForHorizon(estimate, currentPrice, dias);
+      return `   ${String(dias).padStart(2)} dia${dias > 1 ? "s" : " "}: ${formatPrice(r.low)} – ${formatPrice(r.high)}  (${(r.widthPct * 100).toFixed(1)}% de largura)`;
+    });
+
+    await ctx.reply(
+      [
+        header,
+        priceLine,
+        "",
+        // Faixa por HORIZONTE em vez de um número solto: a decisão real é
+        // "quanto tempo quero que dure", e largura escala com √t.
+        "Faixa sugerida, por quanto tempo você quer que ela aguente:",
+        ...linhas,
+        "",
+        `Base: ${estimate.pointCount} pontos de preço reais ao longo de ${estimate.observedDays.toFixed(0)} dias · volatilidade medida de ${(estimate.dailyVolatility * 100).toFixed(2)}%/dia.`,
+        "Cada faixa cobre ~68% dos cenários no seu horizonte (±1 desvio). Faixa mais larga sai de range menos, mas concentra menos liquidez e rende menos taxa — esse trade-off é seu.",
+        "",
+        disclaimer,
+      ].join("\n")
+    );
+    return;
+  }
+
   // V4 não tem oráculo TWAP nativo (observe() virou hook opcional) — sem
   // tentar simular volatilidade por outra via, mostra só preço + faixa
   // honesta em vez de fingir uma calibração que não existe pra esse
@@ -77,13 +134,16 @@ export async function rangeCommand(ctx: CommandContext<Context>) {
       [
         header,
         priceLine,
-        "Faixa por volatilidade real: não disponível pra Uniswap V4 (o pool não tem oráculo TWAP nativo — esse recurso existe só pra V3 aqui).",
+        "Ainda não consigo calibrar a faixa deste pool: não tenho histórico de preço suficiente dele, e o V4 não tem oráculo TWAP nativo pra consultar na hora (no V3 dá pra recorrer a ele).",
+        "O bot grava um ponto de preço a cada 15min dos pools em que você tem posição — depois de alguns dias acompanhando, a calibração passa a funcionar.",
         "Considere olhar a distribuição de liquidez direto no app do Uniswap antes de decidir a faixa.",
       ].join("\n")
     );
     return;
   }
 
+  // Sem histórico próprio suficiente, cai pro oráculo do pool — com todas as
+  // ressalvas de viés acima.
   for (const { windowSeconds, checkpointCount } of VOLATILITY_WINDOWS) {
     const secondsAgos = buildSecondsAgos(windowSeconds, checkpointCount);
     const tickCumulatives = await fetchTickCumulatives(chainKey, info.poolAddress, secondsAgos);

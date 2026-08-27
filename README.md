@@ -129,6 +129,23 @@ Pra isso funcionar, duas coisas são detectadas automaticamente:
 
 Um filtro por endereço (`trustedTokens` + tokens que já passaram por posições suas) impede que airdrop de scam entre como aporte — ele chega exatamente como um depósito legítimo.
 
+## Como a faixa é calibrada
+
+O `/range` estima volatilidade a partir do **histórico de preço que o próprio bot guarda** (`pool_price_history`: backfill + um ponto a cada 15min), e só recorre ao oráculo TWAP do pool quando não há histórico suficiente.
+
+A ordem importa, e a razão é metodológica. O oráculo do Uniswap V3 guarda observações num buffer **circular de tamanho fixo**: quanto mais negociado o pool, mais rápido as posições antigas são sobrescritas e **menor** fica o alcance histórico. Usar "a primeira janela que responder" escolhe a base de cálculo por disponibilidade, não por qualidade — com dois efeitos ruins:
+
+1. quanto mais o preço se move, menos tempo se observa, e **mais estreita** sai a faixa — o inverso do correto;
+2. duas pools ficam comparadas em bases diferentes sem que isso apareça.
+
+Medido em 27/08/2026 no WBTC/USDC 0.05% da Arbitrum ($9,4M de TVL, $10M/dia): o oráculo alcançava **4,9 horas** e produzia uma faixa de **2,0%** — enquanto a volatilidade real do par, sobre 37 dias do banco, é **1,67%/dia**. Essa faixa não sobreviveria um dia.
+
+O histórico de **todos os pools do mesmo par na chain** (V3 e V4) é unificado antes de estimar: são o mesmo preço (a arbitragem os mantém alinhados), e usar só um faz a amostra depender de qual deles o bot acompanhou por mais tempo — o mesmo par chegou a dar 1,87%/dia pelo V3 e 1,05% pelo V4.
+
+A resposta é por **horizonte** ("pra durar ~3 dias, use X–Y"), porque é essa a decisão real, e declara sempre a base: quantos pontos, quantos dias, qual volatilidade medida. Largura escala com √t — dobrar o horizonte aumenta a faixa ~41%, não 100%.
+
+> O centro da faixa vem do preço **on-chain ao vivo**, nunca do último ponto do histórico. Bug real: o histórico do pool V3 parou quando a posição migrou pro V4, e centrar nele gerou uma faixa que não continha o preço atual.
+
 ## Contexto de mercado
 
 O `/mercado` responde "o momento está bom?" pelo volume agregado de todas as DEXs. A leitura é por **percentil contra os últimos 90 dias**, não por um rótulo inventado: "percentil 84%" é verificável, "bull market" é opinião.
