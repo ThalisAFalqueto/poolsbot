@@ -4,9 +4,9 @@ import type { OnchainPosition, PositionRangeSuggestion, PositionState } from "..
 
 const NOW = new Date("2026-08-15T12:00:00Z");
 
-// Necessário sempre que o teste espera uma notificação out_of_range/reminder
-// (format-reason.ts assume não-nulo nesses casos — null só é válido quando
-// a posição está in_range e nenhuma notificação vai ser gerada).
+// Usado nos testes que esperam notificação out_of_range/reminder. NÃO é
+// obrigatório: format-reason.ts tolera null e só omite a linha da sugestão
+// (ver o teste de zona morta no fim deste arquivo).
 const HEURISTIC_SUGGESTION: PositionRangeSuggestion = {
   range: { tickLower: -1000, tickUpper: 1000 },
   source: "heuristic",
@@ -103,5 +103,66 @@ describe("evaluatePosition", () => {
     const gasCost = { costEth: 0.001, costToken1: 2.5 };
     const { notification } = evaluatePosition({ position, state: IN_RANGE_STATE, now: NOW, gasCost, suggestedRange: HEURISTIC_SUGGESTION });
     expect(notification?.reason).toContain("Custo estimado de rebalance");
+  });
+
+  // REGRESSÃO — bug real de produção (27/08/2026). O job decidia se calculava
+  // a faixa sugerida com `isInRange` (borda crua) e esta máquina de estado só
+  // considera recuperado com margem de histerese. Na faixa entre os dois
+  // critérios ("zona morta"), o job mandava null e o lembrete era emitido
+  // mesmo assim — o formatter estourava com TypeError e derrubava o ciclo
+  // INTEIRO da wallet (histórico de preço e alerta de IL junto).
+  describe("zona morta da histerese (regressão)", () => {
+    // Faixa 1000-2000, margem 10% = 100. Zona morta: [1000,1100) e [1900,2000).
+    const OUT_OF_RANGE_STATE: PositionState = {
+      status: "out_of_range",
+      outOfRangeSince: new Date("2026-08-15T00:00:00Z"),
+      lastNotifiedAt: new Date("2026-08-15T00:00:00Z"), // >6h atrás: lembrete devido
+    };
+
+    it("tick dentro da borda mas dentro da margem NÃO é considerado recuperado", () => {
+      const position = makePosition({ currentTick: 1050 }); // dentro de 1000-2000, mas < 1100
+      const { nextState, notification } = evaluatePosition({
+        position,
+        state: OUT_OF_RANGE_STATE,
+        now: NOW,
+        gasCost: null,
+        suggestedRange: HEURISTIC_SUGGESTION,
+      });
+      expect(nextState.status).toBe("out_of_range");
+      expect(notification?.kind).toBe("reminder");
+    });
+
+    it("emite o lembrete sem estourar quando a sugestão vem null", () => {
+      const position = makePosition({ currentTick: 1050 });
+      expect(() =>
+        evaluatePosition({ position, state: OUT_OF_RANGE_STATE, now: NOW, gasCost: null, suggestedRange: null })
+      ).not.toThrow();
+    });
+
+    it("sem sugestão, a mensagem omite a linha de faixa em vez de quebrar", () => {
+      const position = makePosition({ currentTick: 1050 });
+      const { notification } = evaluatePosition({
+        position,
+        state: OUT_OF_RANGE_STATE,
+        now: NOW,
+        gasCost: null,
+        suggestedRange: null,
+      });
+      expect(notification?.reason).toContain("continua fora da faixa");
+      expect(notification?.reason).not.toContain("Faixa sugerida");
+    });
+
+    it("aviso inicial de saída também tolera sugestão null", () => {
+      const position = makePosition({ currentTick: 2500 }); // fora de verdade
+      const { notification } = evaluatePosition({
+        position,
+        state: IN_RANGE_STATE,
+        now: NOW,
+        gasCost: null,
+        suggestedRange: null,
+      });
+      expect(notification?.kind).toBe("out_of_range");
+      expect(notification?.reason).toContain("fora da faixa");
+    });
   });
 });

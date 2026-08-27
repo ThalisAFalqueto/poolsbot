@@ -59,14 +59,21 @@ export function formatWindowDuration(seconds: number): string {
 // faixa foi calibrada por movimento de preço real ou se caiu no heurístico
 // de espelhar a largura atual (pool sem histórico suficiente) — nunca
 // finge uma precisão que não tem.
-function suggestedRangeLine(position: OnchainPosition, suggestion: PositionRangeSuggestion): string {
+// Devolve [] quando não há sugestão, pra a linha simplesmente não aparecer.
+// ANTES ela recebia `suggestion!` e estourava com null — bug real de produção
+// (27/08/2026): derrubava o ciclo INTEIRO do check-positions daquela wallet
+// (histórico de preço e alerta de IL junto), não só a mensagem. Formatar texto
+// nunca pode derrubar monitoramento; a causa raiz está corrigida no job, isto
+// aqui é a segunda barreira.
+function suggestedRangeLine(position: OnchainPosition, suggestion: PositionRangeSuggestion | null): string[] {
+  if (!suggestion) return [];
   const low = formatBoundaryPrice(suggestion.range.tickLower, position.token0.decimals, position.token1.decimals);
   const high = formatBoundaryPrice(suggestion.range.tickUpper, position.token0.decimals, position.token1.decimals);
   const basis =
     suggestion.source === "volatility"
       ? `calibrada por volatilidade real, últimos ${formatWindowDuration(suggestion.volatilityWindowSeconds!)}`
       : "largura atual espelhada — sem histórico de preço suficiente pra calibrar";
-  return `Faixa sugerida (${basis}): ${low} – ${high} ${position.token1.symbol} por ${position.token0.symbol}`;
+  return [`Faixa sugerida (${basis}): ${low} – ${high} ${position.token1.symbol} por ${position.token0.symbol}`];
 }
 
 const CALL_TO_ACTION = "Use /positions para ver todas as suas posições.";
@@ -84,14 +91,14 @@ function gasCostLines(position: OnchainPosition, gasCost: GasCostEstimate | null
 export function formatOutOfRangeReason(
   position: OnchainPosition,
   gasCost: GasCostEstimate | null,
-  suggestedRange: PositionRangeSuggestion
+  suggestedRange: PositionRangeSuggestion | null
 ): string {
   return [
     header(position),
     rangeLine(position),
     currentPriceLine(position),
     "Status: 🚨 fora da faixa — posição parada de render fees",
-    suggestedRangeLine(position, suggestedRange),
+    ...suggestedRangeLine(position, suggestedRange),
     ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
@@ -102,7 +109,7 @@ export function formatReminderReason(
   position: OnchainPosition,
   outOfRangeSince: Date | null,
   gasCost: GasCostEstimate | null,
-  suggestedRange: PositionRangeSuggestion
+  suggestedRange: PositionRangeSuggestion | null
 ): string {
   const since = outOfRangeSince ? outOfRangeSince.toLocaleString("pt-BR") : "data desconhecida";
   return [
@@ -110,7 +117,7 @@ export function formatReminderReason(
     rangeLine(position),
     currentPriceLine(position),
     `Status: 🔔 continua fora da faixa desde ${since}`,
-    suggestedRangeLine(position, suggestedRange),
+    ...suggestedRangeLine(position, suggestedRange),
     ...gasCostLines(position, gasCost),
     "",
     CALL_TO_ACTION,
@@ -163,11 +170,13 @@ export type FormatReasonFn = (
   suggestedRange: PositionRangeSuggestion | null
 ) => string;
 
-// suggestedRange só é obrigatória de verdade pros kinds out_of_range/reminder
-// (garantido pelo job — sempre calcula algo quando a posição está fora de
-// range); back_in_range ignora. O "| null" no tipo existe porque
-// EvaluatePositionInput também usa null pra representar "posição in_range,
-// não computado" antes de saber qual kind vai sair da avaliação.
+// suggestedRange pode ser null em QUALQUER kind — a garantia de "o job sempre
+// calcula quando está fora de range" que este comentário afirmava era FALSA e
+// causou um crash em produção: o job usava a borda crua pra decidir se
+// calculava, e a máquina de estado usa margem de histerese pra decidir se
+// notifica. Na faixa entre as duas, o job mandava null e o formatter estourava.
+// Hoje o job usa o mesmo critério (isSafelyInRange), e aqui a linha só é
+// omitida se ainda assim vier null.
 export function formatReason(
   position: OnchainPosition,
   kind: PositionNotification["kind"],
@@ -177,9 +186,9 @@ export function formatReason(
 ): string {
   switch (kind) {
     case "out_of_range":
-      return formatOutOfRangeReason(position, gasCost, suggestedRange!);
+      return formatOutOfRangeReason(position, gasCost, suggestedRange);
     case "reminder":
-      return formatReminderReason(position, outOfRangeSince, gasCost, suggestedRange!);
+      return formatReminderReason(position, outOfRangeSince, gasCost, suggestedRange);
     case "back_in_range":
       return formatBackInRangeReason(position);
   }

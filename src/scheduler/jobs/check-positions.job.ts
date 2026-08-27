@@ -5,7 +5,7 @@ import { findCloseGasCost, findMintGasCost, findV4CloseGasCost, findV4MintGasCos
 import { calculateImpermanentLoss } from "../../domain/lp-rebalance/calculate-il.js";
 import { estimateRebalanceCost, type GasCostEstimate } from "../../domain/lp-rebalance/estimate-gas-cost.js";
 import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/evaluate-il-alert.js";
-import { evaluatePosition } from "../../domain/lp-rebalance/evaluate-position.js";
+import { evaluatePosition, isSafelyInRange } from "../../domain/lp-rebalance/evaluate-position.js";
 import { formatIlLine } from "../../domain/lp-rebalance/format-reason.js";
 import { getAmountsForLiquidity } from "../../domain/lp-rebalance/liquidity-math.js";
 import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
@@ -115,7 +115,13 @@ async function suggestRangeIfOutOfRange(
   position: OnchainPosition,
   gasCost: GasCostEstimate | null
 ): Promise<PositionRangeSuggestion | null> {
-  if (isInRange(position.currentTick, position.tickLower, position.tickUpper)) return null;
+  // CRITÉRIO TEM QUE SER O MESMO da máquina de estado (evaluate-position), não
+  // a borda crua: ela só considera a posição recuperada com margem de
+  // histerese pra dentro. Usando `isInRange` aqui, existia uma faixa de ticks
+  // (dentro da borda, mas dentro da margem) em que este método devolvia null e
+  // o evaluatePosition ainda emitia lembrete — o formatter estourava e
+  // derrubava o ciclo inteiro da wallet. Bug real, 27/08/2026.
+  if (isSafelyInRange(position.currentTick, position.tickLower, position.tickUpper)) return null;
 
   const gasCostFraction = computeGasCostFraction(position, gasCost);
 

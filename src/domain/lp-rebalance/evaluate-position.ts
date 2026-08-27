@@ -13,7 +13,11 @@ const RECOVERY_MARGIN_FRACTION = 0.1;
 // Mesmo ritmo de lembrete usado como default no v1 (DEFAULT_ALERT_RULES).
 const REMINDER_INTERVAL_HOURS = 6;
 
-function isSafelyInRange(currentTick: number, tickLower: number, tickUpper: number): boolean {
+// Exportado porque o JOB precisa usar exatamente este critério pra decidir se
+// calcula a faixa sugerida. Enquanto ele usava `isInRange` (borda crua) e isto
+// aqui usava margem, existia uma faixa de ticks em que o job mandava null e a
+// máquina de estado emitia lembrete — crash em produção (27/08/2026).
+export function isSafelyInRange(currentTick: number, tickLower: number, tickUpper: number): boolean {
   const width = tickUpper - tickLower;
   const margin = width * RECOVERY_MARGIN_FRACTION;
   return currentTick >= tickLower + margin && currentTick < tickUpper - margin;
