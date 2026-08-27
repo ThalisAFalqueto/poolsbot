@@ -342,7 +342,15 @@ export async function fetchTickCumulatives(
       args: [secondsAgos],
     });
     return tickCumulatives;
-  } catch {
+  } catch (err) {
+    // O revert mais comum aqui é "OLD": o timestamp pedido é mais antigo que
+    // a observação mais velha guardada no buffer circular do pool. Isso NÃO
+    // significa pool parado — significa o contrário: pool muito ativo
+    // sobrescreve o buffer (tamanho fixo) rápido e o alcance encolhe. Logar a
+    // razão evita o diagnóstico errado (o erro era engolido em silêncio, e a
+    // mensagem genérica de "sem histórico" mandava investigar o lado errado).
+    const reason = err instanceof Error ? err.message.split("\n")[0] : String(err);
+    console.warn(`[onchain] observe() falhou em ${poolAddress} (${secondsAgos[0]}s atrás): ${reason}`);
     return null;
   }
 }

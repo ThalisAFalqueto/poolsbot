@@ -12,10 +12,30 @@ export type VolatilityWindow = { windowSeconds: number; checkpointCount: number 
 // movimentada na Arbitrum guardava ~7 dias, uma pool WETH/USDC mais
 // ativa na Base guardava só ~6-24h). Cada tentativa custa 1 chamada de
 // RPC, independente da janela ou de quantos checkpoints.
+// Cascata do maior pro menor: usa a primeira janela que o oráculo do pool
+// consegue servir. Janela longa é melhor (mais amostra, menos ruído), mas nem
+// todo pool alcança.
+//
+// Por que existem janelas CURTAS aqui — e por que isso não é preciosismo:
+// o buffer do oráculo do Uniswap V3 tem tamanho FIXO (observationCardinality)
+// e é circular. Um pool MUITO ativo sobrescreve as posições antigas rápido, e
+// aí o alcance histórico dele encolhe. Medido ao vivo (27/08/2026) no
+// WBTC/USDC 0.05% da Arbitrum: $10M de volume/dia, cardinality 1000, e o
+// oráculo só alcançava ~4,9 HORAS — abaixo da menor janela que existia aqui
+// (6h), então o /range não conseguia calibrar num dos pools mais líquidos da
+// chain e devolvia "sem histórico", o que sugeria pool parado quando era o
+// oposto.
+//
+// O piso é 2h de propósito: abaixo disso a amostra vira ruído de curtíssimo
+// prazo, e extrapolar isso pra largura de faixa produziria uma posição
+// apertada demais, que sai de range no primeiro movimento. Preferimos cair no
+// heurístico a sugerir uma faixa perigosa.
 export const VOLATILITY_WINDOWS: VolatilityWindow[] = [
   { windowSeconds: 7 * 24 * 3600, checkpointCount: 12 },
   { windowSeconds: 24 * 3600, checkpointCount: 12 },
   { windowSeconds: 6 * 3600, checkpointCount: 12 },
+  { windowSeconds: 4 * 3600, checkpointCount: 12 },
+  { windowSeconds: 2 * 3600, checkpointCount: 12 },
 ];
 
 // ---------------------------------------------------------------------
