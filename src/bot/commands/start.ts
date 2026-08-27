@@ -28,6 +28,9 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/graph [apelido ou tokenId] — imagem mostrando a faixa da posição vs. preço de entrada e atual (sem argumento, usa sua única posição)",
       "/closed — histórico de posições de LP já fechadas, com o P&L final de cada uma",
       "/mes [AAAA-MM] — resultado do mês pelo patrimônio total da carteira (já descontando gas e slippage); sem argumento, mês atual",
+      "/mercado — como está o volume do mercado cripto: patamar contra os últimos 90 dias e direção recente",
+      "/comparar <par> — o mesmo par ranqueado entre chains por giro (volume/TVL); sem argumento, usa os pares que você tem",
+      "/watchpair <par> — acompanha um par a mais no resumo diário (/unwatchpair pra remover)",
     ].join("\n")
   );
 }

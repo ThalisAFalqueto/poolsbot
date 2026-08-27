@@ -11,7 +11,12 @@ const TABLES = [
   "lp_position_state",
   "lp_position_il_baseline",
   "lp_position_il_alert_state",
-  "job_status", // sem FK pra nenhuma outra tabela — TRUNCATE CASCADE das demais não alcança, precisa listar
+  // As duas abaixo não têm FK pra nenhuma outra tabela — o TRUNCATE CASCADE
+  // das demais não alcança elas, então precisam ser listadas na mão. Vazamento
+  // real: sem market_volume_history aqui, linhas de um teste sobreviviam pro
+  // seguinte e quebravam a asserção de "banco vazio".
+  "job_status",
+  "market_volume_history",
 ];
 
 // TRUNCATE com múltiplas tabelas numa única instrução não exige ordem de

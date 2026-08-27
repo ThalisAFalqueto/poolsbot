@@ -464,3 +464,45 @@ export const walletCashFlows = pgTable(
     userOccurredAtIdx: index("wallet_cash_flows_user_occurred_at_idx").on(table.userId, table.occurredAt),
   })
 );
+
+// Volume agregado de TODAS as DEXs por dia — o pano de fundo de mercado que o
+// /mercado e o resumo diário usam pra dizer se o momento está aquecido ou
+// fraco. Só dias FECHADOS entram: o dia em curso é parcial e distorceria
+// qualquer percentil ou média calculada em cima (ver data/defillama/dexs.ts).
+//
+// Preenchida de uma vez por src/scripts/backfill-market-volume.ts (a API
+// devolve a série inteira desde 2014 numa chamada) e mantida pelo job diário.
+// Espelha o desenho de pool_volume_history: chave por data, onConflictDoNothing.
+export const marketVolumeHistory = pgTable(
+  "market_volume_history",
+  {
+    id: serial("id").primaryKey(),
+    date: date("date").notNull(),
+    volumeUsd: doublePrecision("volume_usd").notNull(),
+    source: text("source").notNull(), // "defillama_backfill" | "defillama_daily"
+    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    dateIdx: uniqueIndex("market_volume_history_date_idx").on(table.date),
+  })
+);
+
+// Pares que o usuário quer acompanhar na comparação entre chains, ALÉM dos
+// que ele já tem em posição (esses saem das próprias posições, sem precisar
+// configurar nada). Guardado como chave NORMALIZADA (símbolos ordenados, ex:
+// "USDC-WBTC") porque cross-chain não dá pra casar por endereço: o mesmo token
+// tem contrato diferente em cada chain. Ver domain/market/pair-compare.ts.
+export const watchedPairs = pgTable(
+  "watched_pairs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    pairKey: text("pair_key").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    userPairIdx: uniqueIndex("watched_pairs_user_id_pair_key_idx").on(table.userId, table.pairKey),
+  })
+);

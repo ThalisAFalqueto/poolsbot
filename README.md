@@ -100,6 +100,9 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/labelposition <tokenId> <nome>` | apelido pra usar no `/graph` |
 | `/closed` | posições já fechadas, com P&L final e gas |
 | `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
+| `/mercado` | patamar do volume de DEXs (gráfico + percentil vs 90 dias) |
+| `/comparar <par>` | o mesmo par ranqueado entre chains por giro |
+| `/watchpair <par>` | acompanha um par a mais no resumo diário |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/find`, `/yield`, `/pool` | busca e ranqueia pools (dados da DefiLlama) |
 | `/watch`, `/unwatch`, `/alerts`, `/unalert` | alertas de APY/TVL/volume |
@@ -125,6 +128,25 @@ Pra isso funcionar, duas coisas são detectadas automaticamente:
 - **Saque**: token que saiu pra um endereço **sem código** (carteira comum); pool e router são contratos.
 
 Um filtro por endereço (`trustedTokens` + tokens que já passaram por posições suas) impede que airdrop de scam entre como aporte — ele chega exatamente como um depósito legítimo.
+
+## Contexto de mercado
+
+O `/mercado` responde "o momento está bom?" pelo volume agregado de todas as DEXs. A leitura é por **percentil contra os últimos 90 dias**, não por um rótulo inventado: "percentil 84%" é verificável, "bull market" é opinião.
+
+Duas métricas que parecem brigar e não brigam:
+
+- **Percentil** = patamar. Onde o volume de hoje está frente aos últimos 3 meses.
+- **Variação 1d/7d** = direção. Pra onde vem andando.
+
+Um mercado pode estar num patamar alto **e** caindo — e é justamente essa combinação que interessa. Por isso as duas aparecem juntas, e o campo que compara semana vs mês se chama `weekVsMonth`, não "tendência": ele mede nível, não direção.
+
+**O bot nunca altera a meta de 3%/mês.** Ele mostra o contexto ao lado dela e para por aí — um número que baliza decisão precisa ser estável entre meses pra comparação fazer sentido.
+
+O `/comparar` ranqueia o mesmo par entre chains por **giro** (volume 24h ÷ TVL): quantas vezes por dia o capital do pool é negociado. Como a taxa é cobrada por negociação, mais giro é mais taxa por dólar aplicado. O ranking marca chains que o bot não monitora e avisa que giro ignora custo de gas, risco de bridge e profundidade na sua faixa.
+
+> Cross-chain, o mesmo token tem **contrato diferente em cada chain** — casar por endereço não funciona. A chave é o símbolo normalizado (ordenado, com um mapa mínimo de apelidos). `USDC.e` não é `USDC`: são ponte e nativo, com liquidez e risco distintos, e há teste garantindo que não sejam misturados.
+
+Histórico: a DefiLlama devolve a série diária **desde 2014** numa chamada (~19 MB), então `src/scripts/backfill-market-volume.ts` preenche tudo de uma vez e o job diário só acrescenta. O dia em curso é sempre descartado — é parcial e distorceria percentil e médias.
 
 ## Estrutura
 

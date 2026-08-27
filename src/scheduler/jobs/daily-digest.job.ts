@@ -1,0 +1,145 @@
+import { chains, getActiveChains } from "../../config/chains.js";
+import { fetchAllPools } from "../../data/defillama/client.js";
+import { fetchLastClosedDay, fetchMarketVolumeNow } from "../../data/defillama/dexs.js";
+import { comparePoolsForPair, normalizePairKey } from "../../domain/market/pair-compare.js";
+import { analyzeMarketRegime } from "../../domain/market/regime.js";
+import { telegramChannel } from "../../notifications/channels/telegram.channel.js";
+import { listPositionPairSymbols, listUserWallets } from "../../persistence/repositories/lp-positions.repository.js";
+import {
+  findLatestMarketVolumeDate,
+  insertMarketVolume,
+  listMarketVolumeSince,
+  listWatchedPairs,
+} from "../../persistence/repositories/market.repository.js";
+import { formatMarketRegime } from "../../bot/commands/mercado.js";
+import { formatPairComparison } from "../../bot/commands/comparar.js";
+
+// Resumo diário: regime de mercado + comparação dos pares acompanhados entre
+// chains. Roda no ciclo de 15min como os outros, mas com DOIS portões:
+//   1. horário: só a partir de DIGEST_HOUR_UTC (briefing matinal, não 3h da
+//      manhã — o resumo chega quando a pessoa vai olhar);
+//   2. idempotência: só manda se ainda não mandou hoje.
+//
+// A gravação do volume de mercado acontece ANTES e INDEPENDENTE do envio: se
+// o Telegram falhar, o histórico do dia não se perde (ele é a base do
+// percentil, e um buraco ali contamina a leitura por 90 dias).
+
+/** 11h UTC = 8h no horário de Brasília. */
+const DIGEST_HOUR_UTC = 11;
+const LOOKBACK_DAYS = 200;
+const MIN_TVL_USD = 100_000;
+/** Teto de pares no resumo — mais que isso vira spam diário, não briefing. */
+const MAX_PAIRS_IN_DIGEST = 3;
+
+const sentToday = new Set<string>();
+
+function utcDate(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+// Grava o último dia FECHADO. Idempotente por data (onConflictDoNothing), e
+// só busca a série se de fato falta dado — a chamada é a de ~19 MB.
+async function recordMarketVolume(): Promise<void> {
+  const latestStored = await findLatestMarketVolumeDate();
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  if (latestStored !== null && latestStored >= yesterday) return; // já em dia
+
+  const point = await fetchLastClosedDay();
+  if (!point) {
+    console.warn("[daily-digest] a DefiLlama não devolveu nenhum dia fechado");
+    return;
+  }
+  await insertMarketVolume([{ ...point, source: "defillama_daily" }]);
+}
+
+async function buildDigest(userId: number): Promise<string[]> {
+  const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
+  const [series, now] = await Promise.all([listMarketVolumeSince(since), fetchMarketVolumeNow()]);
+  const blocks = [formatMarketRegime(analyzeMarketRegime(series), now)];
+
+  // Pares = os que ele tem em posição ∪ os que ele configurou.
+  const [fromPositions, watched] = await Promise.all([listPositionPairSymbols(userId), listWatchedPairs(userId)]);
+  const keys = new Set<string>();
+  for (const symbol of fromPositions) {
+    const k = normalizePairKey(symbol);
+    if (k) keys.add(k);
+  }
+  for (const k of watched) keys.add(k);
+  if (keys.size === 0) return blocks;
+
+  const monitorable = getActiveChains().map((c) => chains[c].defillamaChainName);
+  const allPools = await fetchAllPools();
+  const comparable = allPools
+    .filter((p) => p.tvlUsd >= MIN_TVL_USD && !p.outlier)
+    .map((p) => ({
+      poolId: p.pool,
+      chain: p.chain,
+      project: p.project,
+      symbol: p.symbol,
+      tvlUsd: p.tvlUsd,
+      volumeUsd1d: p.volumeUsd1d,
+      apyBase: p.apyBase,
+      apy: p.apy,
+      poolMeta: p.poolMeta,
+    }));
+
+  for (const pairKey of [...keys].slice(0, MAX_PAIRS_IN_DIGEST)) {
+    blocks.push(formatPairComparison(pairKey, comparePoolsForPair(comparable, pairKey, monitorable)));
+  }
+  return blocks;
+}
+
+export async function dailyDigestJob(): Promise<string> {
+  const now = new Date();
+  const today = utcDate(now);
+
+  // O volume é gravado sempre que falta, independente do horário do resumo —
+  // não faz sentido perder o dado do dia por causa do portão de horário.
+  try {
+    await recordMarketVolume();
+  } catch (err) {
+    console.error("[daily-digest] falha ao gravar volume de mercado:", err);
+  }
+
+  if (now.getUTCHours() < DIGEST_HOUR_UTC) {
+    return `volume em dia; resumo sai a partir das ${DIGEST_HOUR_UTC}h UTC.`;
+  }
+
+  const rows = await listUserWallets();
+  const userIds = [...new Set(rows.map((r) => r.userId))];
+  if (userIds.length === 0) return "nenhuma wallet vinculada.";
+
+  const chatByUser = new Map(rows.map((r) => [r.userId, r.telegramChatId]));
+  let sent = 0;
+  let skipped = 0;
+
+  for (const userId of userIds) {
+    const key = `${userId}:${today}`;
+    if (sentToday.has(key)) {
+      skipped += 1;
+      continue;
+    }
+
+    const chatId = chatByUser.get(userId);
+    if (!chatId) continue;
+
+    try {
+      const blocks = await buildDigest(userId);
+      for (const block of blocks) await telegramChannel.send(chatId, block);
+      // Marca DEPOIS do envio: se falhar no meio, a próxima rodada tenta de
+      // novo em vez de pular o dia inteiro.
+      sentToday.add(key);
+      sent += 1;
+    } catch (err) {
+      console.error(`[daily-digest] falha ao montar/enviar resumo do usuário ${userId}:`, err);
+    }
+  }
+
+  // Memória de processo: `sentToday` se perde num restart, e aí o resumo
+  // poderia sair duas vezes no mesmo dia. Aceito de propósito — a alternativa
+  // (mais uma tabela) não se paga pra uma mensagem informativa, e mandar duas
+  // vezes é bem menos grave que não mandar.
+  const summary = sent > 0 ? `resumo diário enviado pra ${sent} usuário(s).` : `nada a enviar (${skipped} já receberam hoje).`;
+  console.log(`[daily-digest] ${summary}`);
+  return summary;
+}

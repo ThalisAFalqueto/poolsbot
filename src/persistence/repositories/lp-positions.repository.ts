@@ -108,6 +108,25 @@ export async function listKnownTokenAddresses(userId: number, chain: string): Pr
   return [...tokens];
 }
 
+// Pares (por SÍMBOLO) que o usuário tem ou já teve em posição — base do
+// acompanhamento automático na comparação entre chains. Símbolo, e não
+// endereço, porque a comparação é cross-chain: o mesmo token tem contrato
+// diferente em cada chain (ver domain/market/pair-compare.ts).
+export async function listPositionPairSymbols(userId: number): Promise<string[]> {
+  const active = await db
+    .select({ t0: lpPositions.token0Symbol, t1: lpPositions.token1Symbol })
+    .from(lpPositions)
+    .where(eq(lpPositions.userId, userId));
+  const closed = await db
+    .select({ t0: closedLpPositions.token0Symbol, t1: closedLpPositions.token1Symbol })
+    .from(closedLpPositions)
+    .where(eq(closedLpPositions.userId, userId));
+
+  const pairs = new Set<string>();
+  for (const r of [...active, ...closed]) pairs.add(`${r.t0}-${r.t1}`);
+  return [...pairs];
+}
+
 export type PositionSnapshot = {
   entryValueToken1: number;
   positionValueToken1: number;
