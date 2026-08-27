@@ -52,7 +52,7 @@ function buildEthPriceCache() {
   };
 }
 
-function formatGasLine(row: ClosedPositionRow, ethPriceInToken1: number | null): string {
+export function formatGasLine(row: ClosedPositionRow, ethPriceInToken1: number | null): string {
   const symbol = row.nativeGasSymbol ?? "?";
   const mint = row.mintGasNative !== null ? `${formatGasAmount(row.mintGasNative)} ${symbol}` : "não disponível";
   const close = row.closeGasNative !== null ? `${formatGasAmount(row.closeGasNative)} ${symbol}` : "não disponível";
@@ -69,7 +69,7 @@ function formatGasLine(row: ClosedPositionRow, ethPriceInToken1: number | null):
   return `Gas: abertura ${mint} · fechamento ${close} · total ${totalText}${approxText}`;
 }
 
-function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: number | null): string {
+export function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: number | null): string {
   const name = row.label ?? `#${row.tokenId}`;
   const opened = row.openedAt.toLocaleDateString("pt-BR");
   const closed = row.closedAt.toLocaleDateString("pt-BR");

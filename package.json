@@ -9,6 +9,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run test/domain",
+    "test:ci": "vitest run test/domain test/data test/bot test/integration",
     "test:integration": "vitest run test/integration",
     "test:onchain": "vitest run test/onchain",
     "test:all": "vitest run",

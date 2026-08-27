@@ -48,7 +48,7 @@ const PNL_DISCLAIMER =
 // colchão reservado. 3200 deixa ~900 de colchão (cabeçalho ~60 +
 // disclaimer 227 + até ~600 pro resumo, generoso pra qualquer portfólio
 // realista).
-const MAX_MESSAGE_CHARS = 3200;
+export const MAX_MESSAGE_CHARS = 3200;
 
 // 4 casas decimais pros amounts de token (formatPrice usa 2, que zeraria
 // quantidades pequenas de WETH); os VALORES em token1 continuam com 2 casas.
@@ -56,7 +56,7 @@ function formatAmount(value: number): string {
   return value.toFixed(4);
 }
 
-type FeesAmounts = { amount0: number; amount1: number };
+export type FeesAmounts = { amount0: number; amount1: number };
 
 // endereço encurtado (0x1234…abcd) como fallback quando a wallet não tem
 // rótulo — só é chamado quando o usuário tem 2+ wallets vinculadas.
@@ -67,7 +67,7 @@ function shortAddress(address: string): string {
 // Genérica pra reaproveitar entre APR total (fees+preço) e APR só-de-taxas
 // (equivalente ao "fee APR" que ferramentas tipo Revert Finance mostram
 // separado do "total APR" — a diferença entre os dois é o efeito do IL).
-function formatAprLine(apr: AprResult | null, label: string): string {
+export function formatAprLine(apr: AprResult | null, label: string): string {
   if (!apr) return `${label}: indisponível (fees desconhecidas)`;
   if (apr.unreliableReason === "too_new") {
     const hours = Math.max(0, Math.round(apr.elapsedDays * 24));
@@ -86,7 +86,7 @@ function formatAprLine(apr: AprResult | null, label: string): string {
 // APR" acima, que já é anualizado/mensalizado) — só faz sentido mostrar
 // quando o cálculo é confiável (senão simpleReturnPct vem zerado por
 // construção, ver calculate-apr.ts).
-function formatFeeAprLine(feeApr: AprResult | null): string {
+export function formatFeeAprLine(feeApr: AprResult | null): string {
   const aprLine = formatAprLine(feeApr, "Rentabilidade em taxas");
   if (!feeApr?.reliable) return aprLine;
   const roiPct = (feeApr.simpleReturnPct * 100).toFixed(2);
@@ -104,7 +104,7 @@ function formatFeeAprLine(feeApr: AprResult | null): string {
 // primeiro, depois pediu de volta 1 linha já que entendeu o significado. A
 // nota "≈ USD" continua fora: quando token1 já É uma stablecoin tipo USDC,
 // escrever "USDC ≈ USD" só repete o óbvio (o símbolo já deixa claro).
-function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
+export function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
   if (!pnl) return "vs HOLD: indisponível (fees desconhecidas)";
   const vsHold = pnl.ilToken1 + pnl.feesValueToken1;
   const vsHoldPct = pnl.entryValueToken1 > 0 ? (vsHold / pnl.entryValueToken1) * 100 : null;
@@ -112,7 +112,7 @@ function formatHoldLine(pnl: PnlResult | null, token1Symbol: string): string {
   return `Se tivesse feito HOLD: ${formatPrice(pnl.hodlValueToken1)} ${token1Symbol} · vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${token1Symbol}${pctText}`;
 }
 
-function formatAgeLine(apr: AprResult | null): string {
+export function formatAgeLine(apr: AprResult | null): string {
   if (!apr) return "Idade: indisponível";
   if (apr.elapsedDays < 1) {
     const hours = Math.max(0, Math.round(apr.elapsedDays * 24));
@@ -126,14 +126,14 @@ function formatAgeLine(apr: AprResult | null): string {
 // encontrado no dataset da DefiLlama (ver findUniswapV3Pool), null quando
 // foi encontrado mas a própria DefiLlama não reporta volume pra ele (pools
 // muito novos/ilíquidos às vezes vêm assim).
-function formatPoolStatsLine(pool: DefiLlamaPool | undefined): string {
+export function formatPoolStatsLine(pool: DefiLlamaPool | undefined): string {
   if (!pool) return "Pool: TVL/volume indisponível (não encontrado na DefiLlama)";
   const tvl = `$${Math.round(pool.tvlUsd).toLocaleString("pt-BR")}`;
   const volume = pool.volumeUsd1d !== null ? `$${Math.round(pool.volumeUsd1d).toLocaleString("pt-BR")}` : "indisponível";
   return `Pool: TVL ${tvl} · Volume 24h ${volume}`;
 }
 
-function buildPositionBlock(
+export function buildPositionBlock(
   p: OnchainPosition,
   il: ImpermanentLossResult,
   pnl: PnlResult | null,
@@ -199,7 +199,7 @@ function buildPositionBlock(
   ].join("\n");
 }
 
-type SummaryEntry = {
+export type SummaryEntry = {
   token1Address: string;
   token1Symbol: string;
   entryValue: number;
@@ -224,7 +224,7 @@ type SummaryEntry = {
 // também separa corretamente entre chains sem precisar de chave composta
 // aqui: o mesmo símbolo (ex. USDC) tem um ENDEREÇO diferente em cada chain,
 // então agrupar por endereço já isola por chain automaticamente.
-function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
+export function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
   if (entries.length === 0) return [];
 
   const groups = new Map<
@@ -279,7 +279,7 @@ function buildPortfolioSummary(entries: SummaryEntry[]): string[] {
   return ["📊 Resumo do portfólio (por moeda de cotação):", ...lines, ""];
 }
 
-function chunkLines(lines: string[], maxChars: number): string[][] {
+export function chunkLines(lines: string[], maxChars: number): string[][] {
   const chunks: string[][] = [];
   let current: string[] = [];
   let currentLen = 0;

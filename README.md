@@ -36,7 +36,7 @@ Desde 26/08/2026 o bot **não roda mais na máquina de desenvolvimento** — viv
 Não há CI: o deploy é um `rsync` seguido de rebuild e restart. Sempre rodar `npm run typecheck` e os testes **antes**.
 
 ```bash
-npm run typecheck && npx vitest run test/domain test/integration test/data
+npm run typecheck && npm run test:ci
 
 rsync -avz -e "ssh -i ~/.ssh/oracle_poolsbot" \
   --exclude node_modules --exclude .git --exclude dist --exclude .venv \
@@ -145,7 +145,7 @@ contracts/      RebalanceController.sol (Foundry) — rascunho de testnet,
 
 > São dois `scripts/` diferentes: `src/scripts/` é TypeScript rodado pelo `tsx` (backfills); o `scripts/` da raiz é o que não é Node (Python e shell).
 
-`domain/` não importa nada de `data/` nem de `persistence/` — é o que deixa a matemática testável sem RPC nem banco (`test/domain`). Testes de integração sobem um Postgres de verdade (porta 5433, banco `poolsbot_test`); `test/onchain` bate em RPC real e por isso fica fora da suíte padrão.
+`domain/` não importa nada de `data/` nem de `persistence/` — é o que deixa a matemática testável sem RPC nem banco (`test/domain`). `test/bot` cobre a montagem das mensagens: é lógica pura, e foi onde apareceram os bugs que o usuário percebeu lendo o Telegram. Testes de integração sobem um Postgres de verdade (porta 5433, banco `poolsbot_test`); `test/onchain` bate em RPC real e por isso fica fora da suíte padrão.
 
 ## Convenções
 
