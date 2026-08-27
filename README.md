@@ -100,8 +100,8 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/labelposition <tokenId> <nome>` | apelido pra usar no `/graph` |
 | `/closed` | posições já fechadas, com P&L final e gas |
 | `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
-| `/mercado` | patamar do volume de DEXs (gráfico + percentil vs 90 dias) |
-| `/comparar <par>` | o mesmo par ranqueado entre chains por giro |
+| `/mercado` | gráfico do volume de DEXs + percentil vs 90 dias |
+| `/comparar <par>` | gráfico do mesmo par entre chains, ranqueado por giro |
 | `/watchpair <par>` | acompanha um par a mais no resumo diário |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/find`, `/yield`, `/pool` | busca e ranqueia pools (dados da DefiLlama) |
@@ -142,11 +142,14 @@ Um mercado pode estar num patamar alto **e** caindo — e é justamente essa com
 
 **O bot nunca altera a meta de 3%/mês.** Ele mostra o contexto ao lado dela e para por aí — um número que baliza decisão precisa ser estável entre meses pra comparação fazer sentido.
 
-O `/comparar` ranqueia o mesmo par entre chains por **giro** (volume 24h ÷ TVL): quantas vezes por dia o capital do pool é negociado. Como a taxa é cobrada por negociação, mais giro é mais taxa por dólar aplicado. O ranking marca chains que o bot não monitora e avisa que giro ignora custo de gas, risco de bridge e profundidade na sua faixa.
+O `/comparar` gera um gráfico de barras ranqueando o mesmo par entre chains por **giro** (volume 24h ÷ TVL): quantas vezes por dia o capital do pool é negociado. Como a taxa é cobrada por negociação, mais giro é mais taxa por dólar aplicado. O ranking marca chains que o bot não monitora e avisa que giro ignora custo de gas, risco de bridge e profundidade na sua faixa.
 
 > Cross-chain, o mesmo token tem **contrato diferente em cada chain** — casar por endereço não funciona. A chave é o símbolo normalizado (ordenado, com um mapa mínimo de apelidos). `USDC.e` não é `USDC`: são ponte e nativo, com liquidez e risco distintos, e há teste garantindo que não sejam misturados.
 
 Histórico: a DefiLlama devolve a série diária **desde 2014** numa chamada (~19 MB), então `src/scripts/backfill-market-volume.ts` preenche tudo de uma vez e o job diário só acrescenta. O dia em curso é sempre descartado — é parcial e distorceria percentil e médias.
+
+
+> Tanto o `/mercado` quanto o `/comparar` respondem com **imagem** (matplotlib, mesma infra do `/graph`), não tabela de texto. Motivo concreto: o Telegram usa fonte proporcional fora de `<pre>`, então alinhamento por espaços sai torto — e o resumo diário chegou a mandar as tags HTML cruas na tela por não passar `parse_mode`. Imagem não depende de fonte, de largura de tela nem de modo de parse. Se o `.venv` não existir na máquina, os dois caem pro texto em vez de falhar.
 
 ## Estrutura
 

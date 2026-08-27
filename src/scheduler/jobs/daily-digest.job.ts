@@ -12,7 +12,12 @@ import {
   listWatchedPairs,
 } from "../../persistence/repositories/market.repository.js";
 import { formatMarketRegime } from "../../bot/commands/mercado.js";
-import { formatPairComparison } from "../../bot/commands/comparar.js";
+import { preparePairComparison } from "../../bot/commands/comparar.js";
+import { renderMarketPlot } from "../../data/chart/plot-market.js";
+import { renderPairPlot } from "../../data/chart/plot-pairs.js";
+import { InputFile } from "grammy";
+import { Api } from "grammy";
+import { env } from "../../config/env.js";
 
 // Resumo diário: regime de mercado + comparação dos pares acompanhados entre
 // chains. Roda no ciclo de 15min como os outros, mas com DOIS portões:
@@ -52,10 +57,32 @@ async function recordMarketVolume(): Promise<void> {
   await insertMarketVolume([{ ...point, source: "defillama_daily" }]);
 }
 
-async function buildDigest(userId: number): Promise<string[]> {
+/** Um pedaço do resumo: imagem (com legenda) ou texto puro. */
+type DigestBlock = { kind: "photo"; png: Buffer; caption?: string } | { kind: "text"; text: string };
+
+/** Janela desenhada no gráfico de mercado — ver CHART_DAYS em mercado.ts. */
+const CHART_DAYS = 120;
+
+async function buildDigest(userId: number): Promise<DigestBlock[]> {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
   const [series, now] = await Promise.all([listMarketVolumeSince(since), fetchMarketVolumeNow()]);
-  const blocks = [formatMarketRegime(analyzeMarketRegime(series), now)];
+  const regime = analyzeMarketRegime(series);
+  const blocks: DigestBlock[] = [];
+
+  // Gráfico de mercado primeiro — é a leitura imediata; o texto detalha.
+  if (series.length > 0) {
+    try {
+      const png = await renderMarketPlot({
+        history: series.slice(-CHART_DAYS),
+        percentile: regime.available ? regime.percentile : null,
+        label: regime.available ? regime.label : "sem leitura",
+      });
+      blocks.push({ kind: "photo", png });
+    } catch (err) {
+      console.error("[daily-digest] falha ao gerar gráfico de mercado:", err);
+    }
+  }
+  blocks.push({ kind: "text", text: formatMarketRegime(regime, now) });
 
   // Pares = os que ele tem em posição ∪ os que ele configurou.
   const [fromPositions, watched] = await Promise.all([listPositionPairSymbols(userId), listWatchedPairs(userId)]);
@@ -84,9 +111,30 @@ async function buildDigest(userId: number): Promise<string[]> {
     }));
 
   for (const pairKey of [...keys].slice(0, MAX_PAIRS_IN_DIGEST)) {
-    blocks.push(formatPairComparison(pairKey, comparePoolsForPair(comparable, pairKey, monitorable)));
+    const { plot, text } = preparePairComparison(pairKey, comparePoolsForPair(comparable, pairKey, monitorable));
+    if (plot) {
+      try {
+        blocks.push({ kind: "photo", png: await renderPairPlot(plot) });
+      } catch (err) {
+        console.error("[daily-digest] falha ao gerar gráfico de par:", err);
+      }
+    }
+    blocks.push({ kind: "text", text });
   }
   return blocks;
+}
+
+// O canal de notificação só manda TEXTO — imagem exige a Api direto. Mesma
+// instância standalone que telegram.channel.ts usa (desacoplada do bot em
+// polling), pelo mesmo motivo: notificação não depende do ciclo de vida do bot.
+const api = new Api(env.telegramBotToken);
+
+async function sendBlock(chatId: string, block: DigestBlock): Promise<void> {
+  if (block.kind === "photo") {
+    await api.sendPhoto(chatId, new InputFile(block.png, "resumo.png"), block.caption ? { caption: block.caption } : undefined);
+    return;
+  }
+  await telegramChannel.send(chatId, block.text);
 }
 
 export async function dailyDigestJob(): Promise<string> {
@@ -125,7 +173,7 @@ export async function dailyDigestJob(): Promise<string> {
 
     try {
       const blocks = await buildDigest(userId);
-      for (const block of blocks) await telegramChannel.send(chatId, block);
+      for (const block of blocks) await sendBlock(chatId, block);
       // Marca DEPOIS do envio: se falhar no meio, a próxima rodada tenta de
       // novo em vez de pular o dia inteiro.
       sentToday.add(key);
