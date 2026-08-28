@@ -217,6 +217,12 @@ Derivado para o V3 a partir da forma geral `(σ²P²/2)·|x′(P)|`, e **verific
 
 **Abrir mais largo não resolve.** Taxa e custo escalam os dois com a liquidez, então faixa mais larga reduz os dois na mesma proporção. A largura decide quanto *tempo* você fica em faixa, não se a pool vale a pena.
 
+#### A referência é em DÓLARES, não em unidades de token1
+
+`ReferencePosition.valueToken1` é, como o nome diz, um valor em **token1** — e `1000` só significa $1.000 quando token1 é stable. Na `WBTC/EVA`, token1 é EVA (~$43): a referência valia **$43.518**, o aviso dizia "$1.000 aqui seriam 13% da liquidez ativa" quando o correto era 0,3%, e a **diluição era aplicada nessa escala errada**, subestimando o retorno de toda pool cujo token1 não fosse dólar.
+
+O APR *antes* da diluição é adimensional (as unidades cancelam), então o erro só apareceu depois que a diluição entrou. `measurePoolYields` agora converte `REFERENCE_USD` pras unidades de token1 por duas rotas: direto (token1 → USDC) e, se falhar, derivando do token0 pelo preço do próprio pool — que foi o que resolveu o EVA, cujo único par líquido é contra WBTC.
+
 #### σ é a parte frágil
 
 O custo vai ao quadrado de σ, então erro na volatilidade dobra no resultado. O número de amostras foi **medido**, contra a referência independente de 1,8–2,0%/dia obtida de 37 dias do nosso banco:

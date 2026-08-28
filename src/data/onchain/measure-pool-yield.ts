@@ -13,6 +13,7 @@ import {
 } from "../../domain/market/fee-per-liquidity.js";
 import { parseAbi } from "viem";
 import { getPoolInfo, getPublicClient } from "./client.js";
+import { createTokenPriceResolver, type TokenPriceResolver } from "./token-price.js";
 import { getV4PoolInfo } from "./client-v4.js";
 import { fetchFeeGrowthWindow, findBlockNearTimestamp } from "./fee-growth.js";
 
@@ -31,6 +32,21 @@ import { fetchFeeGrowthWindow, findBlockNearTimestamp } from "./fee-growth.js";
  *  Medido em 28/08/2026: as mesmas pools pagaram 40% menos em 20h do que na
  *  média dos 4 dias anteriores — janela curta demais engana. */
 export const MEASURE_WINDOW_DAYS = 3;
+
+/**
+ * Tamanho da posição de referência, EM DÓLARES.
+ *
+ * BUG QUE ISSO CORRIGE (28/08/2026): a referência era `valueToken1: 1000`, ou
+ * seja 1000 UNIDADES DE TOKEN1 — o que só é $1.000 quando token1 é stable. Na
+ * pool WBTC/EVA, token1 é EVA (~$43), então a referência valia $43.518 e o
+ * aviso dizia "$1.000 aqui seriam 13% da liquidez ativa" quando o correto era
+ * 0,3%. Pior: a correção de diluição era aplicada nessa escala errada, e o
+ * retorno saía subestimado em toda pool cujo token1 não fosse dólar.
+ *
+ * O APR ANTES da diluição é adimensional (as unidades cancelam), então esse
+ * erro só apareceu depois que a diluição entrou.
+ */
+const REFERENCE_USD = 1000;
 
 export type MeasurablePool = {
   poolId: string;
@@ -120,12 +136,34 @@ function resolve(pool: MeasurablePool, active: ChainKey[]): Resolved | null {
 
 type Located = { ref: Resolved; poolRef: string };
 
+// Preço de token1 em dólares, pra converter a referência de USD pras unidades
+// em que a liquidez é definida. Duas rotas, nessa ordem:
+//   1. direto (token1 -> USDC), que resolve stable e majors;
+//   2. derivado do token0, usando o preço DESTE pool. Cobre o caso comum de
+//      um par major/alt onde o alt não tem pool contra USDC — foi exatamente o
+//      caso do EVA, que só tem par com WBTC, ETH e USDT.
+// Sem nenhuma das duas, devolve null e a pool não é medida: sem escala não dá
+// pra calcular diluição, e assumir "sem diluição" é o erro que isso corrige.
+async function token1UsdPrice(
+  resolver: TokenPriceResolver,
+  info: { token0: { address: Address; symbol: string }; token1: { address: Address; symbol: string } },
+  poolPrice: number
+): Promise<number | null> {
+  const direto = await resolver(info.token1.address, info.token1.symbol);
+  if (direto !== null && direto > 0) return direto;
+
+  const token0Usd = await resolver(info.token0.address, info.token0.symbol);
+  if (token0Usd === null || token0Usd <= 0 || poolPrice <= 0) return null;
+  return token0Usd / poolPrice; // poolPrice = quantos token1 por token0
+}
+
 async function measureOne(
   r: Resolved,
   toBlock: bigint,
   fromBlock: bigint,
   ref: ReferencePosition,
-  located: Located[]
+  located: Located[],
+  resolver: TokenPriceResolver
 ): Promise<PoolMeasurement | null> {
   const info = r.isV4
     ? await getV4PoolInfo(r.chainKey, r.tokenA, r.tokenB, r.fee)
@@ -142,7 +180,14 @@ async function measureOne(
 
   const price = sqrtPriceX96ToPrice(info.sqrtPriceX96, info.token0.decimals, info.token1.decimals);
   const activeLiquidity = await fetchActiveLiquidity(r.chainKey, r.isV4, info.poolAddress);
-  const measured = measureYield(window, rawSqrtRatio(info.sqrtPriceX96), price, info.token1.decimals, ref, activeLiquidity);
+
+  // A referência é em DÓLARES e precisa virar unidades de token1 — senão a
+  // diluição é calculada na escala errada (ver REFERENCE_USD).
+  const usdPorToken1 = await token1UsdPrice(resolver, info, price);
+  if (usdPorToken1 === null) return null;
+  const refEmToken1: ReferencePosition = { ...ref, valueToken1: REFERENCE_USD / usdPorToken1 };
+
+  const measured = measureYield(window, rawSqrtRatio(info.sqrtPriceX96), price, info.token1.decimals, refEmToken1, activeLiquidity);
   if (!measured) return null;
   located.push({ ref: r, poolRef: info.poolAddress });
   // volatilidade (e portanto o custo) entram depois, num passo por chain
@@ -166,6 +211,9 @@ export async function measurePoolYields(
   // caro, e todas as pools da mesma chain compartilham a mesma janela.
   const targetSeconds = Math.floor(Date.now() / 1000) - MEASURE_WINDOW_DAYS * 86400;
   const chainKeys = [...new Set(resolved.map((r) => r.chainKey))];
+  // Um resolver por chain, com cache interno — vários pools compartilham os
+  // mesmos tokens (WBTC, WETH, USDC) e cada resolução custa até 4 RPCs.
+  const resolvers = new Map(chainKeys.map((k) => [k, createTokenPriceResolver(k)]));
   const blocksByChain = new Map<ChainKey, { from: bigint; to: bigint }>();
   await Promise.all(
     chainKeys.map(async (chainKey) => {
@@ -187,7 +235,7 @@ export async function measurePoolYields(
     resolved.map(async (r) => {
       const blocks = blocksByChain.get(r.chainKey);
       if (!blocks) return null;
-      const m = await measureOne(r, blocks.to, blocks.from, ref, located);
+      const m = await measureOne(r, blocks.to, blocks.from, ref, located, resolvers.get(r.chainKey)!);
       return m ? ([r.poolId, m] as const) : null;
     })
   );
