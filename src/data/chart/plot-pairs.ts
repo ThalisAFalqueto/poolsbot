@@ -15,10 +15,18 @@ export type PairPlotPool = {
   turnover: number | null;
   tvlUsd: number;
   apyBase: number | null;
+  /** Retorno MEDIDO on-chain de uma posição de referência, enquanto em faixa.
+   *  null = não deu pra medir essa pool. */
+  aprInRange: number | null;
   isMonitorable: boolean;
 };
 
-export type PairPlotInput = { pairKey: string; pools: PairPlotPool[] };
+/** Qual grandeza as barras representam. Nunca misturar as duas no mesmo
+ *  gráfico: "apr" é medido do contrato, "turnover" é estimado da DefiLlama —
+ *  desenhá-las na mesma escala sugeriria que são comparáveis. */
+export type PairPlotMetric = "apr" | "turnover";
+
+export type PairPlotInput = { pairKey: string; metric: PairPlotMetric; pools: PairPlotPool[] };
 
 const PYTHON_BIN = path.join(process.cwd(), ".venv", "bin", "python3");
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "plot_pairs.py");

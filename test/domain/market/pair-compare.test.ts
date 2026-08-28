@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { comparePoolsForPair, normalizePairKey, type ComparablePool } from "../../../src/domain/market/pair-compare.js";
+import {
+  comparePoolsForPair,
+  measuredSpread,
+  normalizePairKey,
+  rankPools,
+  type ComparablePool,
+  type ComparedPool,
+} from "../../../src/domain/market/pair-compare.js";
 
 function pool(overrides: Partial<ComparablePool> = {}): ComparablePool {
   return {
@@ -12,6 +19,7 @@ function pool(overrides: Partial<ComparablePool> = {}): ComparablePool {
     apyBase: 20.3,
     apy: 20.3,
     poolMeta: "0.05%",
+    underlyingTokens: ["0x2f2a", "0xaf88"],
     ...overrides,
   };
 }
@@ -103,5 +111,82 @@ describe("comparePoolsForPair", () => {
   it("comparação de chain monitorável é insensível a maiúsculas", () => {
     const [r] = comparePoolsForPair([pool({ chain: "Arbitrum" })], key, ["arbitrum"]);
     expect(r?.isMonitorable).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------
+
+function comparada(overrides: Partial<ComparedPool> = {}): ComparedPool {
+  return { ...pool(), turnover: 1.1, isMonitorable: true, ...overrides };
+}
+
+const medida = (apr: number) => ({ aprInRange: apr, perLiquidityPerDay: 2.3e-9, days: 3 });
+
+describe("rankPools", () => {
+  // O ponto da mudança de 28/08/2026: medido e estimado são grandezas
+  // DIFERENTES. Ordenar os dois juntos por um número só foi o que fez o
+  // ranking antigo errar por ~2x.
+  it("põe pools medidas na frente das não medidas, mesmo com giro menor", () => {
+    const medidaFraca = comparada({ poolId: "medida", turnover: 0.1 });
+    const estimadaForte = comparada({ poolId: "estimada", turnover: 99 });
+    const r = rankPools([estimadaForte, medidaFraca], new Map([["medida", medida(0.5)]]));
+    expect(r[0]!.poolId).toBe("medida");
+    expect(r[1]!.measured).toBeNull();
+  });
+
+  it("ordena as medidas por retorno medido", () => {
+    const r = rankPools(
+      [comparada({ poolId: "a" }), comparada({ poolId: "b" }), comparada({ poolId: "c" })],
+      new Map([
+        ["a", medida(0.9)],
+        ["b", medida(1.4)],
+        ["c", medida(1.1)],
+      ])
+    );
+    expect(r.map((p) => p.poolId)).toEqual(["b", "c", "a"]);
+  });
+
+  it("ordena as não medidas por giro entre si", () => {
+    const r = rankPools([comparada({ poolId: "x", turnover: 0.3 }), comparada({ poolId: "y", turnover: 2.0 })], new Map());
+    expect(r.map((p) => p.poolId)).toEqual(["y", "x"]);
+  });
+
+  it("giro nulo vai pro fim em vez de liderar", () => {
+    const r = rankPools([comparada({ poolId: "sem", turnover: null }), comparada({ poolId: "com", turnover: 0.01 })], new Map());
+    expect(r.map((p) => p.poolId)).toEqual(["com", "sem"]);
+  });
+});
+
+describe("measuredSpread", () => {
+  it("precisa de pelo menos duas medições", () => {
+    expect(measuredSpread(rankPools([comparada({ poolId: "a" })], new Map([["a", medida(1.0)]])))).toBeNull();
+    expect(measuredSpread(rankPools([comparada({ poolId: "a" })], new Map()))).toBeNull();
+  });
+
+  // Caso real (28/08/2026): 4 pools do WBTC-USDC medidas entre 96,6% e 104,9%
+  // — razão 1,09, ou seja "tanto faz qual pool". O apyBase das MESMAS pools
+  // ia de 10,9% a 30,1% (razão 2,76) e teria mandado trocar de pool à toa.
+  it("reproduz o spread medido no WBTC-USDC", () => {
+    const r = rankPools(
+      [comparada({ poolId: "a" }), comparada({ poolId: "b" }), comparada({ poolId: "c" }), comparada({ poolId: "d" })],
+      new Map([
+        ["a", medida(1.049)],
+        ["b", medida(1.017)],
+        ["c", medida(1.007)],
+        ["d", medida(0.966)],
+      ])
+    );
+    expect(measuredSpread(r)).toBeCloseTo(1.086, 2);
+  });
+
+  it("ignora as não medidas no cálculo do spread", () => {
+    const r = rankPools(
+      [comparada({ poolId: "a" }), comparada({ poolId: "b" }), comparada({ poolId: "z" })],
+      new Map([
+        ["a", medida(1.0)],
+        ["b", medida(2.0)],
+      ])
+    );
+    expect(measuredSpread(r)).toBeCloseTo(2, 6);
   });
 });

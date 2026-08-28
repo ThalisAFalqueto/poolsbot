@@ -29,8 +29,9 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/closed — histórico de posições de LP já fechadas, com o P&L final de cada uma",
       "/mes [AAAA-MM] — resultado do mês pelo patrimônio total da carteira (já descontando gas e slippage); sem argumento, mês atual",
       "/mercado — como está o volume do mercado cripto: patamar contra os últimos 90 dias e direção recente",
-      "/comparar <par> — o mesmo par ranqueado entre chains por giro (volume/TVL); sem argumento, usa os pares que você tem",
+      "/comparar <par> — o mesmo par ranqueado entre chains pelo que cada pool paga DE VERDADE (medido on-chain, não o apyBase); sem argumento, usa os pares que você tem",
       "/watchpair <par> — acompanha um par a mais no resumo diário (/unwatchpair pra remover)",
+      "/explicacoes [assunto] — como cada conta do bot é feita: fórmula, exemplo com números reais e o que o número não diz",
     ].join("\n")
   );
 }

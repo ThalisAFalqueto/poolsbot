@@ -101,13 +101,14 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/closed` | posições já fechadas, com P&L final e gas |
 | `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
 | `/mercado` | gráfico do volume de DEXs + percentil vs 90 dias |
-| `/comparar <par>` | gráfico do mesmo par entre chains, ranqueado por giro |
+| `/comparar <par>` | gráfico do mesmo par entre chains, ranqueado pelo que cada pool **paga de verdade** (medido on-chain) |
 | `/watchpair <par>` | acompanha um par a mais no resumo diário |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/find`, `/yield`, `/pool` | busca e ranqueia pools (dados da DefiLlama) |
 | `/watch`, `/unwatch`, `/alerts`, `/unalert` | alertas de APY/TVL/volume |
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
 | `/status` | última execução de cada job |
+| `/explicacoes [assunto]` | como cada conta do bot é feita: fórmula, exemplo real e o que o número **não** diz |
 
 ## Dois jeitos de medir resultado
 
@@ -159,7 +160,30 @@ Um mercado pode estar num patamar alto **e** caindo — e é justamente essa com
 
 **O bot nunca altera a meta de 3%/mês.** Ele mostra o contexto ao lado dela e para por aí — um número que baliza decisão precisa ser estável entre meses pra comparação fazer sentido.
 
-O `/comparar` gera um gráfico de barras ranqueando o mesmo par entre chains por **giro** (volume 24h ÷ TVL): quantas vezes por dia o capital do pool é negociado. Como a taxa é cobrada por negociação, mais giro é mais taxa por dólar aplicado. O ranking marca chains que o bot não monitora e avisa que giro ignora custo de gas, risco de bridge e profundidade na sua faixa.
+### Comparar pools: por que não pelo apyBase
+
+O `/comparar` ranqueia o mesmo par entre chains pelo que cada pool **paga por unidade de liquidez**, lido do contrato — não pelo `apyBase` da DefiLlama nem pelo giro (volume ÷ TVL).
+
+Os dois critérios antigos dividem por **TVL**, e TVL conta toda a liquidez da pool, inclusive a que está **fora de faixa e não ganha nada**. Uma posição concentrada não divide taxa com o TVL: divide com quem está posicionado no preço de agora.
+
+O erro foi medido, não suposto (28/08/2026, WBTC-USDC):
+
+| pool | apyBase (DefiLlama) | medido on-chain |
+|---|---|---|
+| Arbitrum uni v3 0.3% | 16,2% | **105%/ano** |
+| Arbitrum uni v4 0.05% | 10,9% | **102%/ano** |
+| Arbitrum uni v3 0.05% | 24,1% | **101%/ano** |
+| Polygon uni v3 0.3% | 30,1% | **97%/ano** |
+
+O `apyBase` espalhava as quatro de 10,9% a 30,1% (razão 2,8x) e teria mandado trocar de pool. Medidas, elas pagam quase igual — 9% de diferença. Faz sentido em equilíbrio: se uma pool do mesmo par pagasse bem mais por unidade de liquidez, os LPs migrariam pra lá até nivelar. **Escolher a pool importa pouco; escolher a largura da faixa importa muito.**
+
+Como é medido (`src/domain/market/fee-per-liquidity.ts` + `src/data/onchain/fee-growth.ts`):
+
+1. `feeGrowthGlobal` é a taxa acumulada **por unidade de liquidez**. A diferença entre dois blocos ÷ tempo é o que a posição ganha, sem passar por TVL.
+2. A comparação usa uma **posição de referência fixa** ($1.000 em ±3%) — faixa mais estreita sempre dá APR maior, então larguras diferentes não comparam nada.
+3. O APR resultante é **enquanto em faixa**, não desconta IL nem gas, e a janela é de 3 dias (as mesmas pools pagaram 40% menos em 20h que na média dos 4 dias anteriores — janela curta engana).
+
+Pool que não dá pra medir (chain sem RPC aqui, protocolo fora do Uniswap V3/V4, V4 com hook customizado) fica **fora do ranking** em vez de entrar com um número de régua diferente; o texto diz quantas ficaram. Sem nenhuma medição, cai pro giro — rotulado como estimativa.
 
 > Cross-chain, o mesmo token tem **contrato diferente em cada chain** — casar por endereço não funciona. A chave é o símbolo normalizado (ordenado, com um mapa mínimo de apelidos). `USDC.e` não é `USDC`: são ponte e nativo, com liquidez e risco distintos, e há teste garantindo que não sejam misturados.
 
@@ -195,3 +219,4 @@ contracts/      RebalanceController.sol (Foundry) — rascunho de testnet,
 - **Nunca inventar número.** Se um dado não dá pra calcular com confiança, o texto diz "indisponível" e explica o motivo — não cai num valor plausível.
 - **`tokenId` não é identificador único.** Ele só é único dentro de um contrato: V3 e V4 numeram separado e podem colidir. A identidade real é `(tokenId, chain, protocol)`.
 - **`token1` é a unidade de conta.** Todo P&L é medido no token de cotação da própria posição — não há oráculo de preço em USD, e conversão entre posições de moedas diferentes é evitada de propósito.
+- **`/explicacoes` faz parte do cálculo, não da documentação.** `src/bot/commands/explicacoes.ts` guarda a fórmula de cada conta que o bot mostra. Mudou o cálculo, muda o verbete **no mesmo commit** — texto desatualizado ali é pior que texto nenhum, porque tem cara de autoridade. Todo verbete usa número real já medido (nunca exemplo que fecha bonito) e termina no que aquele número **não** diz; há teste garantindo a seção "NÃO DIZ" e o limite de 4096 chars do Telegram.

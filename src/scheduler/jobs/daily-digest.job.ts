@@ -13,6 +13,7 @@ import {
 } from "../../persistence/repositories/market.repository.js";
 import { formatMarketRegime } from "../../bot/commands/mercado.js";
 import { preparePairComparison } from "../../bot/commands/comparar.js";
+import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
 import { renderMarketPlot } from "../../data/chart/plot-market.js";
 import { renderPairPlot } from "../../data/chart/plot-pairs.js";
 import { InputFile } from "grammy";
@@ -108,10 +109,17 @@ async function buildDigest(userId: number): Promise<DigestBlock[]> {
       apyBase: p.apyBase,
       apy: p.apy,
       poolMeta: p.poolMeta,
+      underlyingTokens: p.underlyingTokens,
     }));
 
   for (const pairKey of [...keys].slice(0, MAX_PAIRS_IN_DIGEST)) {
-    const { plot, text } = preparePairComparison(pairKey, comparePoolsForPair(comparable, pairKey, monitorable));
+    const doPar = comparePoolsForPair(comparable, pairKey, monitorable);
+    // Mesma medição on-chain do /comparar — o resumo diário não pode mostrar
+    // um ranking por régua diferente da do comando.
+    const measurements = await measurePoolYields(
+      doPar.map((p) => ({ poolId: p.poolId, chain: p.chain, project: p.project, poolMeta: p.poolMeta, underlyingTokens: p.underlyingTokens }))
+    );
+    const { plot, text } = preparePairComparison(pairKey, doPar, measurements);
     if (plot) {
       try {
         blocks.push({ kind: "photo", png: await renderPairPlot(plot) });
