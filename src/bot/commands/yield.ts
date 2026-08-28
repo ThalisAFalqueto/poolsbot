@@ -23,6 +23,14 @@ import { isEligiblePool, MAX_APY_VS_MEAN30D_RATIO, MIN_TVL_USD } from "../../dom
 //    (23,3% na DefiLlama, 101%/ano medida) era descartada. O filtro excluía
 //    exatamente o que atendia a meta.
 //
+// 3. RANQUEIA PELO LÍQUIDO, não pela receita. Toda pool tem um custo que
+//    cresce com σ²: quando o preço se move, um arbitrador compra dela barato
+//    até realinhar (LVR — ver domain/market/fee-per-liquidity.ts). Ranquear só
+//    pela taxa premiava par volátil duas vezes: volatilidade gera volume (mais
+//    taxa) E gera arbitragem (mais custo). Medido na Arbitrum, a ordem
+//    INVERTIA: a pool em 1º lugar (ETH-USDT, 135%/ano de taxa) sobrava 4%
+//    depois do custo, enquanto a 3ª (WBTC-EVA, 94%) sobrava 71%.
+//
 // O ranking NÃO usa mais o score multiplicativo de score.ts. Com o número
 // medido em mãos, multiplicá-lo por 5 fatores opacos volta a esconder de onde
 // veio a ordem — e o usuário pediu explicitamente pra entender cada conta
@@ -34,13 +42,11 @@ import { isEligiblePool, MAX_APY_VS_MEAN30D_RATIO, MIN_TVL_USD } from "../../dom
 const DEFAULT_MIN_APY_PCT = 36;
 const MAX_RESULTS = 6;
 
-// Abaixo disso a faixa de referência não dura um dia, e o APR "enquanto em
-// faixa" vira ficção: você passaria o dia inteiro fora dela. Não é um juízo
-// sobre o retorno — é sobre a MEDIDA deixar de descrever qualquer coisa
-// utilizável. Essas pools vão pra uma seção separada em vez de sumir (podem
-// interessar a quem opera de hora em hora) e em vez de disputar o topo da
-// lista, que foi o que aconteceu ao ranquear só por APR: um RAIN-USDT com
-// 1781%/ano e faixa de 1,1 hora liderava a resposta.
+// Abaixo disso a faixa não dura um dia: você reposicionaria todo dia, pagando
+// gas toda vez — custo que o modelo do LVR não inclui. Virou AVISO na linha,
+// não seção separada: desde que o ranking passou a ser pelo líquido, esses
+// pares se excluem sozinhos (o custo deles supera a taxa), e a separação
+// virava uma segunda régua desnecessária.
 const MIN_DIAS_UTILIZAVEL = 1;
 
 // Acima disso, a posição de referência deixa de ser "mais um LP" e vira parte
@@ -77,14 +83,29 @@ function formatDuracao(dias: number | null): string {
   return `faixa dura ~${dias.toFixed(1)} dias`;
 }
 
-function linhaDePool(p: { symbol: string; project: string; poolMeta: string | null; tvlUsd: number; apy: number; poolId: string }, m: PoolMeasurement): string {
+function linhaDePool(
+  p: { symbol: string; project: string; poolMeta: string | null; tvlUsd: number; poolId: string },
+  m: PoolMeasurement
+): string {
   const projeto = p.project.replace("uniswap-", "uni ");
+  const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
+
+  // O líquido primeiro, a decomposição embaixo. O usuário precisa do número da
+  // decisão de cara, mas sem "taxa − custo" à vista o líquido não é auditável
+  // — e ele pediu explicitamente pra conseguir refazer cada conta.
+  const cabeca = m.netApr !== null ? `${m.netApr > 0 ? "+" : ""}${pct(m.netApr)}/ano` : `${pct(m.aprInRange)}/ano de taxa (custo não medido)`;
+  const conta = m.lvrApr !== null ? `taxas ${pct(m.aprInRange)} − custo ${pct(m.lvrApr)}` : `taxas ${pct(m.aprInRange)}`;
+
   const linhas = [
-    `${(m.aprInRange * 100).toFixed(0)}%/ano · ${formatDuracao(m.daysInRange)} — ${p.symbol} (${projeto} ${p.poolMeta ?? "?"})`,
-    `   TVL $${(p.tvlUsd / 1e6).toFixed(1)}M · DefiLlama dizia ${p.apy.toFixed(1)}% · id: ${p.poolId}`,
+    `${cabeca} — ${p.symbol} (${projeto} ${p.poolMeta ?? "?"})`,
+    `   ${conta} · ${formatDuracao(m.daysInRange)} · TVL $${(p.tvlUsd / 1e6).toFixed(1)}M`,
+    `   id: ${p.poolId}`,
   ];
   if (m.referenceShare >= FATIA_QUE_MERECE_AVISO) {
-    linhas.push(`   ⚠️ $1.000 aqui seriam ${(m.referenceShare * 100).toFixed(0)}% da liquidez ativa — pool raso, entrar e sair mexe no preço.`);
+    linhas.splice(2, 0, `   ⚠️ $1.000 aqui seriam ${(m.referenceShare * 100).toFixed(0)}% da liquidez ativa — pool raso, entrar e sair mexe no preço.`);
+  }
+  if (m.daysInRange !== null && m.daysInRange < MIN_DIAS_UTILIZAVEL) {
+    linhas.splice(2, 0, `   ⚠️ a faixa não dura um dia — você reposicionaria diariamente, e o gas disso não está descontado acima.`);
   }
   return linhas.join("\n");
 }
@@ -158,7 +179,10 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
   const medidas = elegiveis
     .map((p) => ({ p, m: medicoes.get(p.pool) }))
     .filter((x): x is { p: (typeof elegiveis)[number]; m: PoolMeasurement } => x.m !== undefined)
-    .sort((a, b) => b.m.aprInRange - a.m.aprInRange);
+    // Ordena pelo LÍQUIDO. Pool sem σ medido (netApr null) cai pro fim: sem
+    // custo estimado não dá pra comparar com quem tem, e chutar zero de custo
+    // é justamente o erro que isso corrige.
+    .sort((a, b) => (b.m.netApr ?? -Infinity) - (a.m.netApr ?? -Infinity));
 
   const naoMedidas = elegiveis.length - medidas.length;
 
@@ -174,61 +198,57 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
     return;
   }
 
-  const acimaDoPiso = medidas.filter((x) => x.m.aprInRange * 100 >= minApyPct);
+  // Piso sobre o LÍQUIDO — é o que responde "vale a pena". Sem custo medido,
+  // o pool não disputa o piso: aparece à parte, dito como tal.
+  const acimaDoPiso = medidas.filter((x) => x.m.netApr !== null && x.m.netApr * 100 >= minApyPct);
+  const semCusto = medidas.filter((x) => x.m.netApr === null);
 
   if (acimaDoPiso.length === 0) {
-    const melhor = medidas[0]!;
+    const melhor = medidas.find((x) => x.m.netApr !== null);
+    if (!melhor) {
+      await ctx.reply(`Achei ${medidas.length} pool(s) em ${chain}, mas não consegui medir a volatilidade de nenhuma — sem ela não dá pra estimar o custo, e mostrar só a taxa engana. Tente de novo em alguns minutos.`);
+      return;
+    }
+    const liquido = melhor.m.netApr! * 100;
     await ctx.reply(
       [
-        `Nenhuma pool de ${chain} passou de ${minApyPct}% ao ano na medição.`,
+        `Nenhuma pool de ${chain} sobra mais de ${minApyPct}% ao ano depois do custo.`,
         "",
-        `A melhor que achei foi ${melhor.p.symbol} (${melhor.p.project.replace("uniswap-", "uni ")} ${melhor.p.poolMeta ?? "?"}) com ${(melhor.m.aprInRange * 100).toFixed(0)}%/ano.`,
+        `A melhor foi ${melhor.p.symbol} (${melhor.p.project.replace("uniswap-", "uni ")} ${melhor.p.poolMeta ?? "?"}): taxas ${(melhor.m.aprInRange * 100).toFixed(0)}% − custo ${(melhor.m.lvrApr! * 100).toFixed(0)}% = ${liquido > 0 ? "+" : ""}${liquido.toFixed(0)}%/ano.`,
         "",
-        `Pra ver ela e as outras: /yield ${chain}${symbol ? ` ${symbol}` : ""} --min ${Math.max(1, Math.floor(melhor.m.aprInRange * 100) - 5)}`,
+        liquido > 0
+          ? `Pra ver ela e as outras: /yield ${chain}${symbol ? ` ${symbol}` : ""} --min ${Math.max(1, Math.floor(liquido) - 5)}`
+          : "Todas custam mais do que pagam agora. Isso acontece quando o mercado está volátil e o volume não acompanha — vale esperar.",
       ].join("\n")
     );
     return;
   }
 
-  // Separa em vez de ordenar junto: par volátil rende mais NO PAPEL porque
-  // volatilidade gera volume, mas gasta a faixa em horas. Misturar os dois
-  // grupos numa lista só faz o pior deles liderar.
-  const utilizaveis = acimaDoPiso.filter((x) => x.m.daysInRange === null || x.m.daysInRange >= MIN_DIAS_UTILIZAVEL);
-  const faixaCurta = acimaDoPiso.filter((x) => x.m.daysInRange !== null && x.m.daysInRange < MIN_DIAS_UTILIZAVEL);
-  const mostradas = utilizaveis.slice(0, MAX_RESULTS);
+  const mostradas = acimaDoPiso.slice(0, MAX_RESULTS);
 
   const linhas = [
-    `Pools em ${chain}${symbol ? ` com "${symbol}"` : ""} — quanto cada uma paga DE VERDADE, medido on-chain nos últimos ${MEASURE_WINDOW_DAYS} dias.`,
+    `Pools em ${chain}${symbol ? ` com "${symbol}"` : ""} — quanto SOBRA depois do custo, medido on-chain nos últimos ${MEASURE_WINDOW_DAYS} dias.`,
     "",
-    `Referência: $${DEFAULT_REFERENCE.valueToken1.toLocaleString("pt-BR")} numa faixa de ±${LARGURA_PCT}%, ENQUANTO a posição estiver em faixa.`,
+    `Referência: $${DEFAULT_REFERENCE.valueToken1.toLocaleString("pt-BR")} numa faixa de ±${LARGURA_PCT}%, enquanto a posição estiver em faixa.`,
     "",
+    ...mostradas.map((x, i) => `${i + 1}. ${linhaDePool({ ...x.p, poolId: x.p.pool }, x.m)}`),
+    "",
+    "O QUE É O CUSTO",
+    "Quando o preço se move lá fora, sua pool fica desatualizada e um arbitrador compra dela barato até realinhar. Isso acontece o dia inteiro e cresce com o QUADRADO da volatilidade — por isso par volátil rende mais em taxa e costuma sobrar menos. Detalhe: /explicacoes custo.",
+    "",
+    "Abrir mais largo NÃO resolve: taxa e custo caem juntos, na mesma proporção. A largura decide quanto tempo você fica em faixa, não se a pool vale a pena.",
+    "",
+    "MARGEM DE ERRO — leia antes de decidir",
+    "O custo depende de σ², então erro na volatilidade dobra aqui. Medindo o mesmo pool com densidades de amostra diferentes, σ variou de 1,8% a 2,2%/dia — o que move o custo em ±25%. Quando taxa e custo estão perto, o SINAL do líquido é incerto: trate como 'empata', não como número exato.",
+    "",
+    `Não descontado: perda impermanente, gas, e o risco de sair de faixa. E o custo é o limite teórico (supõe arbitragem sem atrito) — o real tende a ser um pouco menor, porque o arbitrador só age quando o desalinhamento passa a taxa da pool.`,
+    "",
+    `Antes de abrir: /range <id> pra calibrar a faixa pela volatilidade real do par.`,
   ];
 
-  if (mostradas.length > 0) {
-    linhas.push(...mostradas.map((x, i) => `${i + 1}. ${linhaDePool({ ...x.p, poolId: x.p.pool }, x.m)}`));
-  } else {
-    linhas.push("Nenhuma pool acima do piso tem faixa que dure ao menos um dia — todas as candidatas estão na seção abaixo.");
+  if (semCusto.length > 0) {
+    linhas.push("", `Outras ${semCusto.length} pool(s) foram medidas na taxa mas não na volatilidade — sem isso não dá pra estimar o custo, e listar só a receita ao lado de números líquidos compararia coisas diferentes.`);
   }
-
-  if (faixaCurta.length > 0) {
-    linhas.push(
-      "",
-      `RENDEM MUITO NO PAPEL, MAS A FAIXA NÃO DURA UM DIA (${faixaCurta.length})`,
-      ...faixaCurta.slice(0, 3).map((x) => `   ${(x.m.aprInRange * 100).toFixed(0)}%/ano · ${formatDuracao(x.m.daysInRange)} — ${x.p.symbol}`),
-      "Par volátil rende mais porque volatilidade gera volume — e come a faixa na mesma proporção. Fora de faixa o retorno é zero, então esse número só vale pra quem reposiciona de hora em hora."
-    );
-  }
-
-  linhas.push(
-    "",
-    "COMO LER ISSO",
-    `O %/ano é o retorno enquanto você está em faixa — fora dela é zero. Não desconta IL nem gas.`,
-    `A duração é quanto o preço leva pra ANDAR até a borda, com a volatilidade medida do par. É um teto otimista: encostar acontece antes.`,
-    `O %/ano já desconta a diluição: quando você entra, as taxas do pool passam a ser divididas com você, e em pool raso isso derruba o retorno que aparecia no histórico.`,
-    "",
-    `Antes de abrir: /range <id> pra calibrar a faixa pela volatilidade real do par. Detalhe do cálculo: /explicacoes pool.`
-  );
-
   if (naoMedidas > 0 || cortadasPorSeguranca > 0) {
     const partes: string[] = [];
     if (naoMedidas > 0) partes.push(`${naoMedidas} não deu pra medir on-chain`);

@@ -6,6 +6,7 @@ import {
   DEFAULT_REFERENCE,
   daysToLeaveRange,
   measureYield,
+  netYield,
   volatilityFromTicks,
   type MeasuredYield,
   type ReferencePosition,
@@ -46,14 +47,37 @@ export type PoolMeasurement = MeasuredYield & {
   /** Dias até o preço andar até a borda da faixa de referência. Teto otimista
    *  (encostar acontece antes) — serve pra ordem de grandeza. */
   daysInRange: number | null;
+  /** Custo anualizado de LVR. null quando não deu pra medir σ. */
+  lvrApr: number | null;
+  /** aprInRange − lvrApr. É o número que responde "quanto sobra". Pode ser
+   *  negativo, e em par volátil costuma ser. */
+  netApr: number | null;
 };
 
-/** Quantos blocos amostrar pra estimar volatilidade. 9 pontos = 8 retornos
- *  sobre a janela de 3 dias. Não é uma medição fina de σ: é o suficiente pra
- *  separar "a faixa dura horas" de "a faixa dura dias", que é a distinção que
- *  muda a decisão. Todos os pools da mesma chain são lidos nos MESMOS blocos,
- *  num multicall por bloco — o custo é por chain, não por pool. */
-const TICK_SAMPLES = 9;
+/**
+ * Quantos blocos amostrar pra estimar σ. 49 pontos sobre a janela de 3 dias =
+ * uma amostra a cada ~1,5h.
+ *
+ * O NÚMERO FOI MEDIDO, não escolhido por gosto. σ entra no custo AO QUADRADO,
+ * então erro aqui dobra na resposta. Rodando o mesmo pool (WBTC/USDC) com
+ * densidades diferentes em 28/08/2026, contra a referência independente de
+ * 1,8%-2,0%/dia medida sobre 37 dias do nosso banco:
+ *
+ *      9 amostras (9,0h)   σ 1,31%/dia   custo  53%/ano   <- subestima feio
+ *     17 amostras (4,5h)   σ 1,21%/dia   custo  45%/ano
+ *     25 amostras (3,0h)   σ 1,77%/dia   custo  96%/ano
+ *     49 amostras (1,5h)   σ 1,95%/dia   custo 117%/ano   <- converge aqui
+ *     73 amostras (1,0h)   σ 2,16%/dia   custo 143%/ano
+ *    145 amostras (0,5h)   σ 1,93%/dia   custo 115%/ano
+ *
+ * Poucas amostras é erro de amostra pequena, não conservadorismo: com 8
+ * retornos o σ saía quase 40% abaixo do real, e o bot dizia que a pool sobrava
+ * +44%/ano quando na verdade estava perto do zero a zero.
+ *
+ * Todos os pools da mesma chain são lidos nos MESMOS blocos, num multicall por
+ * bloco — o custo é por chain, não por pool (~4,7s pra 21 pools na Arbitrum).
+ */
+const TICK_SAMPLES = 49;
 
 const v3TickAbi = parseAbi([
   "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)",
@@ -121,8 +145,8 @@ async function measureOne(
   const measured = measureYield(window, rawSqrtRatio(info.sqrtPriceX96), price, info.token1.decimals, ref, activeLiquidity);
   if (!measured) return null;
   located.push({ ref: r, poolRef: info.poolAddress });
-  // volatilidade entra depois, num passo compartilhado por chain
-  return { ...measured, feeTier: r.fee, dailyVolatility: null, daysInRange: null };
+  // volatilidade (e portanto o custo) entram depois, num passo por chain
+  return { ...measured, feeTier: r.fee, dailyVolatility: null, daysInRange: null, lvrApr: null, netApr: null };
 }
 
 /**
@@ -237,10 +261,13 @@ async function anexarVolatilidade(
           const sigma = volatilityFromTicks(serie);
           const medida = out.get(l.ref.poolId);
           if (!medida || sigma === null) return;
+          const liquido = netYield(medida, sigma, ref);
           out.set(l.ref.poolId, {
             ...medida,
             dailyVolatility: sigma,
             daysInRange: daysToLeaveRange(sigma, ref.halfWidthLog),
+            lvrApr: liquido?.lvrApr ?? null,
+            netApr: liquido?.netApr ?? null,
           });
         });
       } catch (err) {

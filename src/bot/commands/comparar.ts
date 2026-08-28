@@ -103,12 +103,17 @@ export function preparePairComparison(
     linhas.push(
       `${pairKey} — medido on-chain, janela de ${MEASURE_WINDOW_DAYS} dias.`,
       "",
-      `Quanto ${referencia} renderia por ano em cada pool, ENQUANTO a posição estiver em faixa:`,
+      `Quanto SOBRA por ano em ${referencia}, ENQUANTO a posição estiver em faixa — já descontado o custo de arbitragem (LVR):`,
       ""
     );
     for (const p of medidas) {
-      const llama = p.apyBase !== null ? `DefiLlama dizia ${p.apyBase.toFixed(1)}%` : "DefiLlama não reporta";
-      linhas.push(`  ${(p.measured!.aprInRange * 100).toFixed(0)}%/ano — ${nomeCurto(p)}  (${llama})`);
+      const m = p.measured!;
+      if (m.netApr !== null && m.lvrApr !== null) {
+        linhas.push(`  ${m.netApr > 0 ? "+" : ""}${(m.netApr * 100).toFixed(0)}%/ano — ${nomeCurto(p)}`);
+        linhas.push(`      taxas ${(m.aprInRange * 100).toFixed(0)}% − custo ${(m.lvrApr * 100).toFixed(0)}%`);
+      } else {
+        linhas.push(`  ${(m.aprInRange * 100).toFixed(0)}%/ano de taxa (custo não medido) — ${nomeCurto(p)}`);
+      }
     }
 
     const spread = measuredSpread(ranked);
@@ -131,7 +136,7 @@ export function preparePairComparison(
       "",
       `Como é medido: feeGrowthGlobal é a taxa que o pool acumulou POR UNIDADE DE LIQUIDEZ; a diferença entre dois blocos, dividida pelo tempo, é exatamente o que sua posição ganha. Não passa por TVL — que é onde o apyBase da DefiLlama erra, por contar também a liquidez parada fora de faixa, que não ganha nada.`,
       "",
-      "Ressalvas: o número é o retorno ENQUANTO EM FAIXA (fora dela é zero), não desconta IL nem gas, e a comparação só vale com a mesma largura nos dois lados — por isso a faixa de referência é fixa."
+      "Ressalvas: é o retorno ENQUANTO EM FAIXA (fora dela é zero), não desconta IL nem gas, e a comparação só vale com a mesma largura dos dois lados — por isso a faixa de referência é fixa. O custo depende de σ², então quando taxa e custo estão perto o sinal do líquido é incerto. Ver /explicacoes custo."
     );
     if (naoMedidas > 0) {
       linhas.push("", `Outras ${naoMedidas} pool(s) apareceram no par mas não deu pra medir: chain sem RPC configurado aqui, protocolo fora do Uniswap V3/V4, ou pool V4 com hook customizado. Ficaram de fora do ranking em vez de entrar com um número de régua diferente.`);

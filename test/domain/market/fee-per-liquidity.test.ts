@@ -3,7 +3,10 @@ import {
   DEFAULT_REFERENCE,
   daysToLeaveRange,
   liquidityForValue,
+  lvrAprForWidth,
+  lvrPerDay,
   measureYield,
+  netYield,
   volatilityFromTicks,
   type FeeGrowthWindow,
 } from "../../../src/domain/market/fee-per-liquidity.js";
@@ -184,5 +187,86 @@ describe("daysToLeaveRange", () => {
 
   it("volatilidade zero não vira divisão por zero", () => {
     expect(daysToLeaveRange(0, 0.03)).toBeNull();
+  });
+});
+
+describe("LVR", () => {
+  // A âncora mais forte que existe: pro caso full-range (CPMM) a fórmula do V3
+  // TEM que recair no resultado canônico do paper, σ²·V/8. Se este teste
+  // quebrar, a derivação está errada e todo número de custo do bot mente.
+  it("recai em σ²·V/8 no caso full-range, que é o resultado canônico", () => {
+    const k = 1e12;
+    const p = 100;
+    const L = Math.sqrt(k); // CPMM: L = √k
+    const V = 2 * L * Math.sqrt(p); // valor do pool em token1
+    for (const sigma of [0.01, 0.05, 0.2]) {
+      expect(lvrPerDay(sigma, L, Math.sqrt(p), 0)).toBeCloseTo((sigma ** 2 * V) / 8, 6);
+    }
+  });
+
+  it("custo cresce com o QUADRADO da volatilidade", () => {
+    const base = lvrAprForWidth(0.01, 0.03);
+    expect(lvrAprForWidth(0.02, 0.03) / base).toBeCloseTo(4, 6);
+    expect(lvrAprForWidth(0.03, 0.03) / base).toBeCloseTo(9, 6);
+  });
+
+  it("faixa mais estreita custa mais, na mesma proporção em que rende mais", () => {
+    expect(lvrAprForWidth(0.014, 0.01)).toBeGreaterThan(lvrAprForWidth(0.014, 0.1));
+  });
+
+  // As duas formas têm que concordar: a fechada (só σ e largura) é a direta
+  // com a liquidez da posição de referência substituída, e o preço cancela.
+  it("a forma fechada concorda com a direta, e independe do preço", () => {
+    const sigma = 0.014;
+    const delta = 0.03;
+    for (const tick of [66_791, 100_000, 10_000]) {
+      const sqrtP = Math.sqrt(1.0001 ** tick);
+      const L = liquidityForValue(1000, sqrtP, delta, 6);
+      const direto = (lvrPerDay(sigma, L, sqrtP, 6) * 365) / 1000;
+      expect(direto).toBeCloseTo(lvrAprForWidth(sigma, delta), 6);
+    }
+  });
+
+  // Números reais da posição do usuário (28/08): σ 1,4%/dia, faixa ±3%.
+  it("reproduz o custo medido na posição do usuário", () => {
+    expect(lvrAprForWidth(0.014, 0.03)).toBeCloseTo(0.6, 1);
+  });
+
+  it("volatilidade zero não gera custo", () => {
+    expect(lvrAprForWidth(0, 0.03)).toBe(0);
+    expect(lvrPerDay(0, 1e9, 28, 6)).toBe(0);
+  });
+});
+
+describe("netYield", () => {
+  const medida = {
+    perLiquidityPerDay: 2.32e-9,
+    dailyFees: 2.74,
+    aprInRange: 1.0,
+    days: 3,
+    referenceShare: 0.00066,
+  };
+
+  // Sem σ não dá pra estimar o custo — e mostrar só a receita foi exatamente o
+  // erro que este módulo corrige. Devolver null força quem exibe a dizer
+  // "não sei" em vez de imprimir um número otimista.
+  it("recusa a dar resultado líquido sem volatilidade", () => {
+    expect(netYield(medida, null)).toBeNull();
+    expect(netYield(medida, 0)).toBeNull();
+  });
+
+  // Caso real: WBTC-USDC pagava 100%/ano de taxa e custava ~60%/ano de LVR.
+  it("desconta o custo da receita", () => {
+    const r = netYield(medida, 0.014)!;
+    expect(r.lvrApr).toBeCloseTo(0.6, 1);
+    expect(r.netApr).toBeCloseTo(1.0 - r.lvrApr, 10);
+  });
+
+  // O achado que motivou tudo: par volátil rende muito e custa mais ainda.
+  // RAIN-USDT tinha 1680%/ano de taxa e σ de ~14,7%/dia — líquido MUITO
+  // negativo. O líquido precisa poder ser negativo, sem piso em zero.
+  it("deixa o líquido ficar negativo quando o custo passa a receita", () => {
+    const r = netYield({ ...medida, aprInRange: 16.8 }, 0.147)!;
+    expect(r.netApr).toBeLessThan(-10);
   });
 });
