@@ -104,7 +104,8 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/comparar <par>` | gráfico do mesmo par entre chains, ranqueado pelo que cada pool **paga de verdade** (medido on-chain) |
 | `/watchpair <par>` | acompanha um par a mais no resumo diário |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
-| `/find`, `/yield`, `/pool` | busca e ranqueia pools (dados da DefiLlama) |
+| `/yield <chain>` | pools de liquidez concentrada ranqueadas pelo que pagam **de verdade** + quanto a faixa dura |
+| `/find`, `/pool` | busca e detalhe de pools (dados da DefiLlama) |
 | `/watch`, `/unwatch`, `/alerts`, `/unalert` | alertas de APY/TVL/volume |
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
 | `/status` | última execução de cada job |
@@ -184,6 +185,35 @@ Como é medido (`src/domain/market/fee-per-liquidity.ts` + `src/data/onchain/fee
 3. O APR resultante é **enquanto em faixa**, não desconta IL nem gas, e a janela é de 3 dias (as mesmas pools pagaram 40% menos em 20h que na média dos 4 dias anteriores — janela curta engana).
 
 Pool que não dá pra medir (chain sem RPC aqui, protocolo fora do Uniswap V3/V4, V4 com hook customizado) fica **fora do ranking** em vez de entrar com um número de régua diferente; o texto diz quantas ficaram. Sem nenhuma medição, cai pro giro — rotulado como estimativa.
+
+#### Diluição: o termo sem o qual a conta mente
+
+`feeGrowthGlobal` mede o que o pool pagou **enquanto você não estava lá**. Multiplicar isso pela sua liquidez só vale se a sua entrada não mudar o denominador:
+
+```
+suas taxas = (taxa por L) × L_ativa × L_ref / (L_ativa + L_ref)
+```
+
+Sem esse último termo o erro é enorme e sempre pra cima. Real: um `WETH-GMX` com volume 24h de ~zero aparecia com **212%/ano** — $1.000 ali seriam **91% da liquidez ativa**. Corrigido, cai pra 19%. Na `WBTC-USDC` do usuário ($1.000 = 0,06% da liquidez) o termo não muda nada, que é exatamente o comportamento certo: a correção só morde onde o pool é raso.
+
+Por isso `measureYield` **se recusa a medir** sem a liquidez ativa, em vez de assumir diluição zero.
+
+### /yield: só pools, e em duas listas
+
+O `/yield` lista só liquidez concentrada. Medido na Arbitrum (28/08/2026), entre as 107 opções que passavam os filtros de segurança, o teto de tudo que **não** é concentrado era **13,8%/ano** (empréstimo 0–6%, renda fixa tokenizada 3–7%, GMX 4,7–13,8%, Pendle 1,3–10,9%) — longe da meta de 36%.
+
+Antes da mudança o comando estava **quebrado no próprio padrão**: `/yield arbitrum` com `--min 36` devolvia **zero pools** em 3 das 4 chains, porque o piso era aplicado sobre o `apy` da DefiLlama. A pool em que o usuário estava (23,3% na DefiLlama, 100%/ano medida) era descartada — o filtro excluía exatamente o que atendia a meta.
+
+O resultado sai em **duas listas**, não uma ordenação só:
+
+| lista | critério |
+|---|---|
+| utilizáveis | faixa de ±3% dura ≥ 1 dia |
+| faixa curta | dura menos que isso |
+
+Ranquear só por retorno **premia par volátil** — volatilidade gera volume, volume gera taxa, e come a faixa na mesma proporção. Sem a separação, o topo virava um `RAIN-USDT` com 1781%/ano cuja faixa dura 1 hora. A duração vem de `dias = (δ/σ)²`, a inversa do `move = σ√t` do `/range`, com σ estimado de 9 amostras de tick na janela (um multicall por bloco, por chain — o custo é por chain, não por pool).
+
+> O `score` multiplicativo (`apy × 5 fatores`) foi **removido**: existia pra ajustar o `apy` da DefiLlama, e com o número medido em mãos multiplicá-lo por fatores opacos só esconderia de onde veio a ordem. Segurança continua como **filtro binário e explicável** (TVL ≥ $1M, APY ≤ 1,5x a média de 30d).
 
 > Cross-chain, o mesmo token tem **contrato diferente em cada chain** — casar por endereço não funciona. A chave é o símbolo normalizado (ordenado, com um mapa mínimo de apelidos). `USDC.e` não é `USDC`: são ponte e nativo, com liquidez e risco distintos, e há teste garantindo que não sejam misturados.
 

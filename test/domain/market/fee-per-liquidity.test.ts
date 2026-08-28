@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_REFERENCE,
+  daysToLeaveRange,
   liquidityForValue,
   measureYield,
+  volatilityFromTicks,
   type FeeGrowthWindow,
 } from "../../../src/domain/market/fee-per-liquidity.js";
 
@@ -49,44 +51,138 @@ describe("liquidityForValue", () => {
 
 describe("measureYield", () => {
   // Reproduz a medição real de 28/08/2026: a pool V3 0.05% da Arbitrum pagou
-  // ~2,3e-9 dólares por unidade de liquidez por dia.
+  // ~2,3e-9 dólares por unidade de liquidez por dia, com 1,79 trilhão de
+  // liquidez ativa no tick corrente (lida do contrato).
   const janela: FeeGrowthWindow = { perLiquidity0: 4.3e-14, perLiquidity1: 3.5e-9, days: 3 };
   const PRECO = 80_427;
+  const L_ATIVA_REAL = 1_791_084_760_921;
+
+  const medir = (ref = DEFAULT_REFERENCE, ativa: number | null = L_ATIVA_REAL) =>
+    measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, ref, ativa);
 
   it("devolve null quando a janela não tem duração", () => {
-    expect(measureYield({ ...janela, days: 0 }, SQRT_P_RAW, PRECO, DECIMALS_USDC)).toBeNull();
+    expect(measureYield({ ...janela, days: 0 }, SQRT_P_RAW, PRECO, DECIMALS_USDC, DEFAULT_REFERENCE, L_ATIVA_REAL)).toBeNull();
+  });
+
+  // Sem a liquidez ativa não dá pra saber se a entrada dilui o próprio
+  // retorno. Assumir que não dilui foi exatamente o erro corrigido — então a
+  // ausência do dado tem que virar "não medi", nunca um número otimista.
+  it("recusa a medir sem a liquidez ativa", () => {
+    expect(medir(DEFAULT_REFERENCE, null)).toBeNull();
+    expect(medir(DEFAULT_REFERENCE, 0)).toBeNull();
   });
 
   it("converte a perna de token0 pelo preço antes de somar", () => {
-    const so1 = measureYield({ perLiquidity0: 0, perLiquidity1: 3.5e-9, days: 3 }, SQRT_P_RAW, PRECO, DECIMALS_USDC)!;
-    const ambas = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC)!;
-    expect(ambas.perLiquidityPerDay).toBeCloseTo(so1.perLiquidityPerDay + (4.3e-14 * PRECO) / 3, 15);
-  });
-
-  // O ponto do módulo inteiro: o APR não depende do TAMANHO da posição de
-  // referência (as unidades se cancelam), só da LARGURA. Se isso quebrar, a
-  // comparação entre pools deixa de fazer sentido.
-  it("APR independe do tamanho da posição de referência", () => {
-    const mil = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, { valueToken1: 1000, halfWidthLog: 0.03 })!;
-    const cem_mil = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, { valueToken1: 100_000, halfWidthLog: 0.03 })!;
-    expect(cem_mil.aprInRange).toBeCloseTo(mil.aprInRange, 8);
+    const so1 = measureYield({ perLiquidity0: 0, perLiquidity1: 3.5e-9, days: 3 }, SQRT_P_RAW, PRECO, DECIMALS_USDC, DEFAULT_REFERENCE, L_ATIVA_REAL)!;
+    expect(medir()!.perLiquidityPerDay).toBeCloseTo(so1.perLiquidityPerDay + (4.3e-14 * PRECO) / 3, 15);
   });
 
   it("APR sobe quando a faixa de referência aperta", () => {
-    const larga = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, { valueToken1: 1000, halfWidthLog: 0.1 })!;
-    const estreita = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, { valueToken1: 1000, halfWidthLog: 0.01 })!;
+    const larga = medir({ valueToken1: 1000, halfWidthLog: 0.1 })!;
+    const estreita = medir({ valueToken1: 1000, halfWidthLog: 0.01 })!;
     expect(estreita.aprInRange).toBeGreaterThan(larga.aprInRange);
   });
 
-  // Ancorado na medição real de 28/08/2026: a pool pagava ~2,3e-9 por unidade
-  // de liquidez por dia, e as 4 pools medidas do par deram 97%-105% ao ano
-  // pra referência de $1.000 em ±3%. Se esse teste quebrar, ou a fórmula
-  // mudou ou a unidade de feeGrowth mudou — nos dois casos o /comparar passa
-  // a mentir, então o intervalo aqui é apertado de propósito.
+  // Ancorado na medição real: 100%/ano pra $1.000 em ±3% na pool do usuário,
+  // com fatia de 0,06% da liquidez ativa. Se isso quebrar, ou a fórmula mudou
+  // ou a unidade de feeGrowth mudou — nos dois casos o /yield e o /comparar
+  // passam a mentir, então o intervalo é apertado de propósito.
   it("reproduz o número medido ao vivo no WBTC/USDC", () => {
-    const r = measureYield(janela, SQRT_P_RAW, PRECO, DECIMALS_USDC, DEFAULT_REFERENCE)!;
+    const r = medir()!;
     expect(r.perLiquidityPerDay).toBeCloseTo(2.32e-9, 10);
+    expect(r.referenceShare).toBeCloseTo(0.00066, 4);
     expect(r.aprInRange).toBeGreaterThan(0.9);
     expect(r.aprInRange).toBeLessThan(1.15);
+  });
+
+  describe("diluição", () => {
+    // Em pool FUNDO a entrada não muda o denominador, e o APR continua sendo
+    // uma propriedade do pool — é o que torna a comparação entre pools válida.
+    it("em pool fundo, o APR quase não depende do tamanho da posição", () => {
+      const mil = medir({ valueToken1: 1000, halfWidthLog: 0.03 })!;
+      const dezMil = medir({ valueToken1: 10_000, halfWidthLog: 0.03 })!;
+      expect(dezMil.aprInRange / mil.aprInRange).toBeGreaterThan(0.99);
+    });
+
+    // Em pool RASO ele depende, e muito. Caso real que motivou a correção: um
+    // WETH-GMX com volume ~zero aparecia com 212%/ano porque $1.000 seriam 91%
+    // da liquidez ativa — retorno que não sobrevive à própria entrada.
+    it("em pool raso, entrar dilui o próprio retorno", () => {
+      const L_RASA = 1e8;
+      const r = medir(DEFAULT_REFERENCE, L_RASA)!;
+      expect(r.referenceShare).toBeGreaterThan(0.9);
+      const semDiluir = medir(DEFAULT_REFERENCE, L_ATIVA_REAL)!;
+      expect(r.aprInRange).toBeLessThan(semDiluir.aprInRange);
+    });
+
+    // O teto físico: por mais liquidez que você ponha, não dá pra ganhar mais
+    // do que o pool inteiro arrecadou. A fórmula ingênua estourava isso.
+    it("nunca promete mais do que o pool arrecadou no período", () => {
+      const L_RASA = 1;
+      const r = medir({ valueToken1: 1_000_000, halfWidthLog: 0.03 }, L_RASA)!;
+      const totalDoPool = medir()!.perLiquidityPerDay * L_RASA;
+      expect(r.dailyFees).toBeLessThanOrEqual(totalDoPool * 1.000001);
+    });
+  });
+});
+
+describe("volatilityFromTicks", () => {
+  const serie = (ticks: number[], passoHoras = 8) =>
+    ticks.map((tick, i) => ({ tick, seconds: 1_787_000_000 + i * passoHoras * 3600 }));
+
+  it("amostra curta demais devolve null em vez de um número inventado", () => {
+    expect(volatilityFromTicks(serie([100, 200]))).toBeNull();
+  });
+
+  it("preço parado tem volatilidade zero", () => {
+    expect(volatilityFromTicks(serie([100, 100, 100, 100, 100]))).toBeCloseTo(0, 12);
+  });
+
+  // Tendência CONSTANTE não é volatilidade: os retornos são todos iguais, e o
+  // desvio-padrão deles é zero. Confundir os dois inflaria σ em par com drift.
+  it("tendência constante não vira volatilidade", () => {
+    expect(volatilityFromTicks(serie([100, 200, 300, 400, 500]))).toBeCloseTo(0, 12);
+  });
+
+  it("mais oscilação, mais volatilidade", () => {
+    const calmo = volatilityFromTicks(serie([100, 110, 100, 110, 100]))!;
+    const agitado = volatilityFromTicks(serie([100, 900, 100, 900, 100]))!;
+    expect(agitado).toBeGreaterThan(calmo);
+  });
+
+  // Cross-check independente: σ do WBTC/USDC medido por AMOSTRAGEM DE TICKS
+  // deu 1,4%/dia, contra 1,67%-2,0% medido pelo histórico de preço do banco
+  // (range-from-history.ts). Caminhos separados, mesma ordem de grandeza.
+  it("reproduz a ordem de grandeza do WBTC/USDC", () => {
+    // ~1,4%/dia em log-preço = ~140 ticks por dia de desvio
+    const ticks = [66_700, 66_820, 66_760, 66_900, 66_840, 66_960, 66_890];
+    const sigma = volatilityFromTicks(ticks.map((tick, i) => ({ tick, seconds: 1_787_000_000 + i * 12 * 3600 })))!;
+    expect(sigma).toBeGreaterThan(0.005);
+    expect(sigma).toBeLessThan(0.05);
+  });
+});
+
+describe("daysToLeaveRange", () => {
+  it("é a inversa exata do move = σ√t usado no /range", () => {
+    const sigma = 0.0167;
+    for (const dias of [1, 3, 7]) {
+      const move = sigma * Math.sqrt(dias);
+      expect(daysToLeaveRange(sigma, move)).toBeCloseTo(dias, 6);
+    }
+  });
+
+  it("par mais volátil gasta a faixa mais rápido", () => {
+    expect(daysToLeaveRange(0.15, 0.03)!).toBeLessThan(daysToLeaveRange(0.015, 0.03)!);
+  });
+
+  // Os dois casos reais lado a lado (28/08): RAIN-USDT com σ 13,9%/dia gasta
+  // ±3% em ~1h; WBTC/USDC com σ 1,4%/dia leva dias.
+  it("separa 'dura horas' de 'dura dias', que é a distinção que importa", () => {
+    expect(daysToLeaveRange(0.139, 0.03)! * 24).toBeLessThan(2);
+    expect(daysToLeaveRange(0.014, 0.03)!).toBeGreaterThan(2);
+  });
+
+  it("volatilidade zero não vira divisão por zero", () => {
+    expect(daysToLeaveRange(0, 0.03)).toBeNull();
   });
 });

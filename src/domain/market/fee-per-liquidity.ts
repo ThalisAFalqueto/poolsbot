@@ -70,6 +70,10 @@ export type MeasuredYield = {
   /** Retorno anualizado da posição de referência, ENQUANTO EM FAIXA. */
   aprInRange: number;
   days: number;
+  /** Fatia da liquidez ativa que a posição de referência passaria a ocupar
+   *  (0.02 = 2%). Perto de 1 significa que ela É a pool — e aí o retorno
+   *  medido no passado não sobrevive à própria entrada. */
+  referenceShare: number;
 };
 
 // APR de uma posição de referência concentrada. É o número que responde
@@ -79,12 +83,31 @@ export type MeasuredYield = {
 // Faixa mais estreita sempre produz APR maior aqui — e sai de faixa mais
 // rápido. Comparar pools exige a MESMA meia-largura nos dois lados, que é
 // justamente o que ReferencePosition fixa.
+// DILUIÇÃO — a correção que faltava (28/08/2026).
+//
+// feeGrowthGlobal mede o que o pool pagou POR UNIDADE DE LIQUIDEZ ENQUANTO
+// VOCÊ NÃO ESTAVA LÁ. Multiplicar isso pela sua liquidez só vale se a sua
+// entrada não mudar o denominador — ou seja, se L_ref << L_ativa.
+//
+// Quando não vale, o erro é gigante e sempre pra cima. Caso real: um pool
+// WETH-GMX na Arbitrum, com volume 24h de ~ZERO, aparecia com 212%/ano — a
+// liquidez ativa dele é tão pequena que a taxa por unidade fica enorme, e a
+// conta ingênua prometia esse retorno pra $1.000 que, ao entrar, virariam a
+// maior parte da pool e diluiriam o próprio retorno.
+//
+// O total de taxa que o pool distribui por dia é (taxa por L) × L_ativa, e
+// não muda porque você entrou. O que muda é a divisão:
+//   suas taxas = (taxa por L) × L_ativa × L_ref / (L_ativa + L_ref)
+// Com L_ref desprezível, o último termo tende a L_ref e recai na fórmula
+// antiga. Com L_ref dominante, satura no total de taxa do pool — que é o
+// teto físico, e é justamente o que a fórmula ingênua estourava.
 export function measureYield(
   window: FeeGrowthWindow,
   sqrtPriceRaw: number,
   price: number,
   decimals1: number,
-  ref: ReferencePosition = DEFAULT_REFERENCE
+  ref: ReferencePosition = DEFAULT_REFERENCE,
+  activeLiquidity: number | null = null
 ): MeasuredYield | null {
   if (window.days <= 0) return null;
 
@@ -94,12 +117,65 @@ export function measureYield(
   const perLiquidityPerDay = perLiquidity / window.days;
 
   const liquidity = liquidityForValue(ref.valueToken1, sqrtPriceRaw, ref.halfWidthLog, decimals1);
-  const dailyFees = perLiquidityPerDay * liquidity;
+
+  // Sem a liquidez ativa não dá pra saber se a diluição importa. Assumir que
+  // não importa é o erro que isso corrige, então o certo é não medir.
+  if (activeLiquidity === null || activeLiquidity <= 0) return null;
+
+  const referenceShare = liquidity / (activeLiquidity + liquidity);
+  const dailyFees = perLiquidityPerDay * activeLiquidity * referenceShare;
 
   return {
     perLiquidityPerDay,
     dailyFees,
     aprInRange: (dailyFees * 365) / ref.valueToken1,
     days: window.days,
+    referenceShare,
   };
+}
+
+// ---------------------------------------------------------------------
+// Quanto tempo uma faixa aguenta.
+//
+// POR QUE ISSO É OBRIGATÓRIO AQUI e não um extra: ranquear pools pelo APR
+// medido, sozinho, PREMIA PAR VOLÁTIL — volatilidade gera volume, volume gera
+// taxa. Medido na Arbitrum em 28/08/2026, o topo da lista virou um RAIN-USDT
+// com 1781%/ano, número verdadeiro e leitura mentirosa: uma faixa de ±3% nesse
+// par não dura duas horas, e fora de faixa o retorno é ZERO.
+//
+// O APR medido é sempre "enquanto em faixa". Sem dizer quanto tempo é esse
+// "enquanto", o número maior é o mais enganoso da lista.
+
+/** Estimativa de σ (volatilidade diária em log-preço) a partir de uma série
+ *  de ticks amostrados ao longo da janela de medição. */
+export function volatilityFromTicks(ticks: { tick: number; seconds: number }[]): number | null {
+  if (ticks.length < 3) return null;
+  const ordenado = [...ticks].sort((a, b) => a.seconds - b.seconds);
+  const TICK_LOG = Math.log(1.0001); // 1 tick nessa fração de log-preço
+
+  const retornos: number[] = [];
+  for (let i = 1; i < ordenado.length; i++) {
+    const dias = (ordenado[i]!.seconds - ordenado[i - 1]!.seconds) / 86_400;
+    if (dias <= 0) continue;
+    retornos.push(((ordenado[i]!.tick - ordenado[i - 1]!.tick) * TICK_LOG) / Math.sqrt(dias));
+  }
+  if (retornos.length < 2) return null;
+
+  const media = retornos.reduce((a, b) => a + b, 0) / retornos.length;
+  const variancia = retornos.reduce((a, b) => a + (b - media) ** 2, 0) / (retornos.length - 1);
+  return Math.sqrt(variancia);
+}
+
+/**
+ * Quantos dias uma faixa de meia-largura `halfWidthLog` aguenta, com σ diário.
+ *
+ * Inverte a mesma difusão do /range (move = σ√t  →  t = (move/σ)²), então os
+ * dois comandos contam a mesma história. É o tempo até o preço ANDAR a
+ * distância da borda, não até ele encostar pela primeira vez — encostar
+ * acontece antes, então isto é um TETO otimista. Serve pra ordem de grandeza
+ * ("horas" vs "dias"), que é exatamente o que separa RAIN-USDT de WBTC-USDC.
+ */
+export function daysToLeaveRange(dailyVolatility: number, halfWidthLog: number): number | null {
+  if (dailyVolatility <= 0) return null;
+  return (halfWidthLog / dailyVolatility) ** 2;
 }
