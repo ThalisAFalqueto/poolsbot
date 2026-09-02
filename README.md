@@ -198,55 +198,43 @@ Sem esse último termo o erro é enorme e sempre pra cima. Real: um `WETH-GMX` c
 
 Por isso `measureYield` **se recusa a medir** sem a liquidez ativa, em vez de assumir diluição zero.
 
-### O custo: LVR
+### Por que o retorno é bruto
 
-Tudo acima mede **receita**. Faltava o outro lado, e ele é da mesma ordem de grandeza.
+Houve uma versão que descontava um custo de arbitragem (LVR, `(σ²/4)·L·√P`) de cada número e ranqueava pelo líquido. **Foi revertida.**
 
-Quando o preço se move fora da pool, ela fica desatualizada e um arbitrador compra dela barato até realinhar. Isso é *loss-versus-rebalancing* ([Milionis, Moallemi, Roughgarden, Zhang, arXiv:2208.06046](https://arxiv.org/abs/2208.06046)), acontece o dia inteiro, e não é risco — é o mecanismo funcionando.
+A fórmula está certa — verificada, recai em `σ²V/8` no caso full-range — mas é derivada supondo arbitragem **sem atrito**. A taxa da pool cria uma região onde arbitrar não compensa, e [Milionis, Moallemi & Roughgarden (arXiv:2305.14604)](https://arxiv.org/abs/2305.14604) mostram que isso corta a perda pela fração de blocos com oportunidade real; em pools de 0,3% e 1% a maior parte volta pro LP nas taxas que os próprios arbitradores pagam.
 
-A pool nunca executa no preço final: executa ao longo da curva, e o preço médio é **exatamente a média geométrica** `√(P₀·P₁)`. O arbitrador embolsa a diferença até o preço de mercado. Daí o custo crescer com σ².
+Era **teto, não estimativa**, e o desvio depende de fee tier e tempo de bloco, que não estão modelados. Ranquear por um número assim é pior que não ranquear por ele. O que barra par volátil hoje é a **duração da faixa**, que é medida em vez de modelada.
 
-```
-LVR = (σ²/4) · L · √P                       por unidade de tempo
-LVR / valor / dia = σ² / (8·(1 − e^(−δ/2))) o preço cancela
-```
+O custo existe e é real — `/explicacoes custo` explica o mecanismo e por que o bot não o subtrai.
 
-Derivado para o V3 a partir da forma geral `(σ²P²/2)·|x′(P)|`, e **verificado**: recai exatamente em `σ²V/8` no caso full-range, que é o resultado canônico do paper. Há teste travando isso.
+### Que largura usar: backtest, não fórmula
 
-> **LVR ≠ IL.** IL depende só de onde o preço parou (geometria da faixa, esperança ~zero sem drift); LVR depende do caminho, acumula sempre e não volta se o preço voltar. Medido na posição real do usuário: o IL de −$0,6366 foi explicado em −$0,6227 **só** pela geometria do preço final, enquanto o LVR do mesmo período era ~$0,33. São custos distintos, e pra decidir *antes* de abrir o certo a subtrair é o LVR.
+O `/range` responde qual largura **rende mais**, simulando cada uma contra o histórico real do par em janelas móveis (`src/domain/lp-rebalance/width-backtest.ts`).
 
-**Abrir mais largo não resolve.** Taxa e custo escalam os dois com a liquidez, então faixa mais larga reduz os dois na mesma proporção. A largura decide quanto *tempo* você fica em faixa, não se a pool vale a pena.
-
-#### A referência é em DÓLARES, não em unidades de token1
-
-`ReferencePosition.valueToken1` é, como o nome diz, um valor em **token1** — e `1000` só significa $1.000 quando token1 é stable. Na `WBTC/EVA`, token1 é EVA (~$43): a referência valia **$43.518**, o aviso dizia "$1.000 aqui seriam 13% da liquidez ativa" quando o correto era 0,3%, e a **diluição era aplicada nessa escala errada**, subestimando o retorno de toda pool cujo token1 não fosse dólar.
-
-O APR *antes* da diluição é adimensional (as unidades cancelam), então o erro só apareceu depois que a diluição entrou. `measurePoolYields` agora converte `REFERENCE_USD` pras unidades de token1 por duas rotas: direto (token1 → USDC) e, se falhar, derivando do token0 pelo preço do próprio pool — que foi o que resolveu o EVA, cujo único par líquido é contra WBTC.
-
-#### σ é a parte frágil
-
-O custo vai ao quadrado de σ, então erro na volatilidade dobra no resultado. O número de amostras foi **medido**, contra a referência independente de 1,8–2,0%/dia obtida de 37 dias do nosso banco:
-
-| amostras | intervalo | σ medido | custo/ano |
+| largura | tempo em faixa | taxa bruta | efetivo |
 |---|---|---|---|
-| 9 | 9,0h | 1,31% | 53% |
-| 25 | 3,0h | 1,77% | 96% |
-| **49** | **1,5h** | **1,95%** | **117%** |
-| 73 | 1,0h | 2,16% | 143% |
+| ±1% | 43% | 282% | **121%** |
+| ±2% | 74% | 141% | 105% |
+| ±3% | 92% | 95% | 87% |
+| ±8,3% | 99% | 35% | 34% |
 
-Com 9 amostras o σ saía ~35% abaixo do real e o bot dizia que a pool sobrava +44%/ano quando estava perto do zero a zero. `TICK_SAMPLES = 49` é onde converge.
+Ficar parado fora da faixa custa **menos** que perder concentração — contra a intuição, e por isso a tabela existe em vez de uma regra. O que o backtest **não** conta é o custo de reposicionar: faixa com 43% de tempo dentro sai de faixa várias vezes por semana. O texto do comando diz isso.
 
-Consequência honesta: **quando taxa e custo estão próximos, o sinal do líquido é incerto.** O texto dos comandos diz isso. E o LVR é o limite teórico (supõe arbitragem sem atrito) — o real tende a ser um pouco menor, porque o arbitrador só age quando o desalinhamento supera a taxa da pool.
-
-### /yield: só pools, e ranqueado pelo líquido
+### /yield: só pools
 
 O `/yield` lista só liquidez concentrada. Medido na Arbitrum (28/08/2026), entre as 107 opções que passavam os filtros de segurança, o teto de tudo que **não** é concentrado era **13,8%/ano** (empréstimo 0–6%, renda fixa tokenizada 3–7%, GMX 4,7–13,8%, Pendle 1,3–10,9%) — longe da meta de 36%.
 
 Antes da mudança o comando estava **quebrado no próprio padrão**: `/yield arbitrum` com `--min 36` devolvia **zero pools** em 3 das 4 chains, porque o piso era aplicado sobre o `apy` da DefiLlama. A pool em que o usuário estava (23,3% na DefiLlama, 100%/ano medida) era descartada — o filtro excluía exatamente o que atendia a meta.
 
-O ranking é pelo **líquido** (`taxas − custo`), não pela receita. Ranquear pela receita premiava par volátil **duas vezes**: volatilidade gera volume (mais taxa) *e* gera arbitragem (mais custo). Medido na Arbitrum, a ordem invertia — a pool em 1º lugar sobrava 4%/ano depois do custo enquanto a 3ª sobrava 71%.
+O ranking é pela **taxa medida**, e o resultado sai em duas listas:
 
-A duração da faixa (`dias = (δ/σ)²`, a inversa do `move = σ√t` do `/range`) virou aviso na linha em vez de lista separada: desde que o ranking é pelo líquido, par volátil se exclui sozinho.
+| lista | critério |
+|---|---|
+| utilizáveis | faixa de ±3% dura ≥ 1 dia |
+| faixa curta | dura menos que isso |
+
+Sem a separação, o topo virava um `RAIN-USDT` com 1781%/ano cuja faixa dura 1 hora. A duração vem de `dias = (δ/σ)²`, a inversa do `move = σ√t` do `/range`, com σ de 49 amostras de tick na janela (um multicall por bloco, por chain).
 
 > O `score` multiplicativo (`apy × 5 fatores`) foi **removido**: existia pra ajustar o `apy` da DefiLlama, e com o número medido em mãos multiplicá-lo por fatores opacos só esconderia de onde veio a ordem. Segurança continua como **filtro binário e explicável** (TVL ≥ $1M, APY ≤ 1,5x a média de 30d).
 

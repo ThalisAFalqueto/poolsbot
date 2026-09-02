@@ -57,9 +57,34 @@ export const DEFAULT_REFERENCE: ReferencePosition = { valueToken1: 1000, halfWid
 // `sqrtPriceRaw` é √(preço BRUTO) = sqrtPriceX96 / 2^96, sem ajuste de
 // decimais — é nessa unidade que L é definida no contrato.
 export function liquidityForValue(valueToken1: number, sqrtPriceRaw: number, halfWidthLog: number, decimals1: number): number {
-  const denom = 2 * sqrtPriceRaw * (1 - Math.exp(-halfWidthLog / 2));
+  const denom = 2 * sqrtPriceRaw * concentrationDenominator(halfWidthLog);
   if (denom <= 0) return 0;
   return (valueToken1 * 10 ** decimals1) / denom;
+}
+
+/**
+ * O termo `1 − e^(−δ/2)` da liquidez de uma faixa simétrica.
+ *
+ * Sozinho não significa nada. O que importa é a RAZÃO entre duas larguras:
+ * ela é exatamente quanto uma faixa concentra a mais que a outra — e portanto
+ * quanto mais taxa recebe com o mesmo capital.
+ */
+export function concentrationDenominator(halfWidthLog: number): number {
+  return 1 - Math.exp(-halfWidthLog / 2);
+}
+
+/**
+ * Quanto uma faixa de meia-largura `halfWidthLog` rende ao ano, dado que uma
+ * faixa de referência rendia `aprAtReference`. Faixa mais estreita concentra
+ * mais liquidez com o mesmo capital e recebe taxa na mesma proporção.
+ *
+ * Extraído em vez de repetido porque o backtest de largura precisa da mesma
+ * relação (ver lp-rebalance/width-backtest.ts), e duas cópias divergem.
+ */
+export function aprForWidth(aprAtReference: number, referenceHalfWidth: number, halfWidthLog: number): number {
+  const alvo = concentrationDenominator(halfWidthLog);
+  if (alvo <= 0) return 0;
+  return (aprAtReference * concentrationDenominator(referenceHalfWidth)) / alvo;
 }
 
 export type MeasuredYield = {
@@ -180,82 +205,3 @@ export function daysToLeaveRange(dailyVolatility: number, halfWidthLog: number):
   return (halfWidthLog / dailyVolatility) ** 2;
 }
 
-// ---------------------------------------------------------------------
-// LVR — o custo de fornecer liquidez.
-//
-// POR QUE ISSO EXISTE: tudo acima mede RECEITA. Faltava o outro lado.
-//
-// Quando o preço se move lá fora, a pool fica desatualizada e um arbitrador
-// compra dela barato (ou vende caro) até realinhar. Isso não é risco nem azar
-// — é o mecanismo funcionando, e acontece o dia inteiro. O nome na literatura
-// é loss-versus-rebalancing (Milionis, Moallemi, Roughgarden, Zhang 2022,
-// arXiv:2208.06046).
-//
-// A conta exata: a pool nunca executa no preço final, ela executa ao longo da
-// curva. O preço médio de execução entre P0 e P1 é EXATAMENTE a média
-// geométrica √(P0·P1) — conferido numericamente contra as fórmulas do V3. O
-// arbitrador embolsa a diferença entre a média geométrica e o preço de
-// mercado, e é por isso que o custo cresce com σ²: quanto maior o movimento,
-// mais longe a média geométrica fica do preço final.
-//
-// Fórmula geral: LVR = (σ²P²/2)·|x'(P)|, com x(P) = quanto do ativo arriscado
-// a posição carrega a cada preço. Pro V3, x(P) = L(1/√P − 1/√Pb), então
-// x'(P) = −L/(2P^1.5) e sobra:
-//
-//     LVR = (σ²/4) · L · √P     por unidade de tempo
-//
-// Conferido: pro caso full-range (CPMM, L = √k, V = 2L√P) isso recai em
-// σ²V/8, que é o resultado canônico do paper. Ver o teste.
-//
-// ATENÇÃO ao que isto NÃO é: LVR ≠ perda impermanente. IL depende só de onde
-// o preço PAROU (é geometria da faixa, esperança ~zero sem drift); LVR depende
-// do CAMINHO, acumula sempre e não volta nem se o preço voltar. Medido na
-// posição real do usuário em 27/08: o IL de −$0,6366 foi explicado em −$0,6227
-// só pela geometria do preço final, enquanto o LVR do mesmo período foi
-// ~$0,33. São dois custos distintos. Pra decidir ANTES de abrir posição, o
-// certo a subtrair é o LVR, que é o esperado.
-
-/** Custo de LVR em token1 por dia, pra uma posição REAL de liquidez conhecida. */
-export function lvrPerDay(dailyVolatility: number, liquidity: number, sqrtPriceRaw: number, decimals1: number): number {
-  if (dailyVolatility <= 0 || liquidity <= 0) return 0;
-  return ((dailyVolatility ** 2 / 4) * liquidity * sqrtPriceRaw) / 10 ** decimals1;
-}
-
-/**
- * Custo de LVR como FRAÇÃO do valor da posição, ao ano, pra uma faixa
- * simétrica de meia-largura `halfWidthLog`.
- *
- * Substituindo a liquidez da posição de referência na fórmula acima, o preço e
- * os decimais CANCELAM e sobra só σ e a largura:
- *
- *     LVR / valor / dia = σ² / (8 · (1 − e^(−δ/2)))
- *
- * É o que torna a comparação entre pools possível: o custo de duas pools
- * diferentes só depende da volatilidade do par e da largura escolhida.
- */
-export function lvrAprForWidth(dailyVolatility: number, halfWidthLog: number): number {
-  if (dailyVolatility <= 0 || halfWidthLog <= 0) return 0;
-  return ((dailyVolatility ** 2 / (8 * (1 - Math.exp(-halfWidthLog / 2)))) * 365);
-}
-
-export type NetYield = {
-  /** Custo anualizado de LVR, como fração do valor (0.61 = 61%/ano). */
-  lvrApr: number;
-  /** Retorno anualizado JÁ DESCONTADO o LVR. Pode ser negativo. */
-  netApr: number;
-};
-
-/**
- * Junta os dois lados. Devolve null sem σ — sem volatilidade não dá pra
- * estimar o custo, e mostrar só a receita foi exatamente o erro que isto
- * corrige.
- */
-export function netYield(
-  measured: MeasuredYield,
-  dailyVolatility: number | null,
-  ref: ReferencePosition = DEFAULT_REFERENCE
-): NetYield | null {
-  if (dailyVolatility === null || dailyVolatility <= 0) return null;
-  const lvrApr = lvrAprForWidth(dailyVolatility, ref.halfWidthLog);
-  return { lvrApr, netApr: measured.aprInRange - lvrApr };
-}

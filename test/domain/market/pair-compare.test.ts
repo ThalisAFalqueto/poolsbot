@@ -120,7 +120,7 @@ function comparada(overrides: Partial<ComparedPool> = {}): ComparedPool {
   return { ...pool(), turnover: 1.1, isMonitorable: true, ...overrides };
 }
 
-const medida = (apr: number, netApr: number | null = null) => ({ aprInRange: apr, perLiquidityPerDay: 2.3e-9, days: 3, netApr });
+const medida = (apr: number) => ({ aprInRange: apr, perLiquidityPerDay: 2.3e-9, days: 3 });
 
 describe("rankPools", () => {
   // O ponto da mudança de 28/08/2026: medido e estimado são grandezas
@@ -191,40 +191,3 @@ describe("measuredSpread", () => {
   });
 });
 
-describe("rankPools com custo descontado", () => {
-  // O achado que motivou descontar o LVR: receita bruta premia par volátil
-  // duas vezes — volatilidade gera volume (mais taxa) E gera arbitragem
-  // (mais custo). Medido na Arbitrum em 28/08/2026, a ordem INVERTIA.
-  it("ordena pelo líquido, não pela receita", () => {
-    const r = rankPools(
-      [comparada({ poolId: "volatil" }), comparada({ poolId: "calma" })],
-      new Map([
-        ["volatil", medida(1.35, 0.04)], // 135% de taxa, sobra 4%
-        ["calma", medida(0.94, 0.71)], // 94% de taxa, sobra 71%
-      ])
-    );
-    expect(r.map((p) => p.poolId)).toEqual(["calma", "volatil"]);
-  });
-
-  it("pool sem custo medido não disputa com quem tem", () => {
-    const r = rankPools(
-      [comparada({ poolId: "sem" }), comparada({ poolId: "com" })],
-      new Map([
-        ["sem", medida(9.99, null)],
-        ["com", medida(0.5, 0.3)],
-      ])
-    );
-    expect(r[0]!.poolId).toBe("com");
-  });
-
-  it("sem nenhum custo medido, cai pra receita", () => {
-    const r = rankPools(
-      [comparada({ poolId: "a" }), comparada({ poolId: "b" })],
-      new Map([
-        ["a", medida(0.5, null)],
-        ["b", medida(1.2, null)],
-      ])
-    );
-    expect(r[0]!.poolId).toBe("b");
-  });
-});

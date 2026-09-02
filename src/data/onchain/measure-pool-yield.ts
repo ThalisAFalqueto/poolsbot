@@ -6,7 +6,6 @@ import {
   DEFAULT_REFERENCE,
   daysToLeaveRange,
   measureYield,
-  netYield,
   volatilityFromTicks,
   type MeasuredYield,
   type ReferencePosition,
@@ -46,7 +45,7 @@ export const MEASURE_WINDOW_DAYS = 3;
  * O APR ANTES da diluição é adimensional (as unidades cancelam), então esse
  * erro só apareceu depois que a diluição entrou.
  */
-const REFERENCE_USD = 1000;
+export const REFERENCE_USD = 1000;
 
 export type MeasurablePool = {
   poolId: string;
@@ -63,11 +62,6 @@ export type PoolMeasurement = MeasuredYield & {
   /** Dias até o preço andar até a borda da faixa de referência. Teto otimista
    *  (encostar acontece antes) — serve pra ordem de grandeza. */
   daysInRange: number | null;
-  /** Custo anualizado de LVR. null quando não deu pra medir σ. */
-  lvrApr: number | null;
-  /** aprInRange − lvrApr. É o número que responde "quanto sobra". Pode ser
-   *  negativo, e em par volátil costuma ser. */
-  netApr: number | null;
 };
 
 /**
@@ -190,8 +184,8 @@ async function measureOne(
   const measured = measureYield(window, rawSqrtRatio(info.sqrtPriceX96), price, info.token1.decimals, refEmToken1, activeLiquidity);
   if (!measured) return null;
   located.push({ ref: r, poolRef: info.poolAddress });
-  // volatilidade (e portanto o custo) entram depois, num passo por chain
-  return { ...measured, feeTier: r.fee, dailyVolatility: null, daysInRange: null, lvrApr: null, netApr: null };
+  // volatilidade entra depois, num passo compartilhado por chain
+  return { ...measured, feeTier: r.fee, dailyVolatility: null, daysInRange: null };
 }
 
 /**
@@ -309,13 +303,10 @@ async function anexarVolatilidade(
           const sigma = volatilityFromTicks(serie);
           const medida = out.get(l.ref.poolId);
           if (!medida || sigma === null) return;
-          const liquido = netYield(medida, sigma, ref);
           out.set(l.ref.poolId, {
             ...medida,
             dailyVolatility: sigma,
             daysInRange: daysToLeaveRange(sigma, ref.halfWidthLog),
-            lvrApr: liquido?.lvrApr ?? null,
-            netApr: liquido?.netApr ?? null,
           });
         });
       } catch (err) {

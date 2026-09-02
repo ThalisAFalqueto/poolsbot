@@ -99,8 +99,6 @@ export type PoolMeasurementLike = {
   aprInRange: number;
   perLiquidityPerDay: number;
   days: number;
-  /** Líquido depois do custo de LVR. null quando σ não foi medido. */
-  netApr?: number | null;
 };
 
 export type RankedPool<M extends PoolMeasurementLike> = ComparedPool & { measured: M | null };
@@ -112,16 +110,7 @@ export function rankPools<M extends PoolMeasurementLike>(
   return pools
     .map((p) => ({ ...p, measured: measurements.get(p.poolId) ?? null }))
     .sort((a, b) => {
-      // Ordena pelo LÍQUIDO quando existe — receita bruta premiava par volátil
-      // duas vezes (mais volume E mais arbitragem contra você).
-      if (a.measured && b.measured) {
-        const an = a.measured.netApr ?? null;
-        const bn = b.measured.netApr ?? null;
-        if (an !== null && bn !== null) return bn - an;
-        if (an !== null) return -1;
-        if (bn !== null) return 1;
-        return b.measured.aprInRange - a.measured.aprInRange;
-      }
+      if (a.measured && b.measured) return b.measured.aprInRange - a.measured.aprInRange;
       if (a.measured) return -1;
       if (b.measured) return 1;
       return (b.turnover ?? -1) - (a.turnover ?? -1);

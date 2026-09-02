@@ -8,6 +8,9 @@ import { formatBoundaryPrice, formatPrice, formatWindowDuration } from "../../do
 import { sqrtPriceX96ToPrice, tickSpacingForFee, tickToPrice } from "../../domain/lp-rebalance/price-math.js";
 import { buildSecondsAgos, intervalAverageTicks, suggestVolatilityRange, VOLATILITY_WINDOWS } from "../../domain/lp-rebalance/volatility-range.js";
 import { estimateVolatility, rangeForHorizon } from "../../domain/lp-rebalance/range-from-history.js";
+import { backtestWidths, bestWidth } from "../../domain/lp-rebalance/width-backtest.js";
+import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
+import { DEFAULT_REFERENCE } from "../../domain/market/fee-per-liquidity.js";
 import { getPriceHistorySince } from "../../persistence/repositories/pool-price-history.repository.js";
 
 // Sugestão de faixa ANTES de abrir uma posição — reaproveita a mesma
@@ -24,6 +27,16 @@ import { getPriceHistorySince } from "../../persistence/repositories/pool-price-
 const HISTORY_LOOKBACK_DAYS = 60;
 /** Horizontes oferecidos — 1 dia (surf), 3 dias e 1 semana. */
 const HORIZONS_DAYS = [1, 3, 7];
+
+/** Larguras testadas no backtest. Vai do bem apertado ao bem folgado: o ponto
+ *  ótimo costuma cair na parte estreita, e sem as opções largas na tabela não
+ *  dá pra VER que ele é estreito. */
+const LARGURAS = [0.01, 0.02, 0.03, 0.04, 0.06, 0.083, 0.1];
+
+/** Horizonte das janelas do backtest. 7 dias é o tempo que uma posição costuma
+ *  ficar aberta aqui — o resultado muda com esse número, e fixá-lo em algo
+ *  arbitrário esconderia isso. */
+const HORIZONTE_BACKTEST_DIAS = 7;
 
 export async function rangeCommand(ctx: CommandContext<Context>) {
   const poolId = ctx.match?.toString().trim();
@@ -101,27 +114,79 @@ export async function rangeCommand(ctx: CommandContext<Context>) {
   const estimate = estimateVolatility(history);
 
   if (estimate) {
-    const linhas = HORIZONS_DAYS.map((dias) => {
-      const r = rangeForHorizon(estimate, currentPrice, dias);
-      return `   ${String(dias).padStart(2)} dia${dias > 1 ? "s" : " "}: ${formatPrice(r.low)} – ${formatPrice(r.high)}  (${(r.widthPct * 100).toFixed(1)}% de largura)`;
-    });
+    // A taxa medida on-chain é o que transforma "tempo em faixa" em retorno.
+    // Sem ela ainda dá pra mostrar o tempo, que já é metade da decisão.
+    const medicao = (
+      await measurePoolYields([{ poolId, chain: pool.chain, project: pool.project, poolMeta: pool.poolMeta, underlyingTokens: pool.underlyingTokens }])
+    ).get(poolId);
 
-    await ctx.reply(
-      [
-        header,
-        priceLine,
+    const backtest = medicao
+      ? backtestWidths(history, {
+          widths: LARGURAS,
+          horizonDays: HORIZONTE_BACKTEST_DIAS,
+          aprAtReferenceWidth: medicao.aprInRange,
+          referenceWidth: DEFAULT_REFERENCE.halfWidthLog,
+        })
+      : null;
+    const melhor = bestWidth(backtest);
+
+    const corpo: string[] = [header, priceLine, ""];
+
+    if (backtest && melhor) {
+      // A tabela é a resposta principal: ela responde "que largura rende
+      // mais", que é a pergunta de quem vai abrir. A faixa por horizonte
+      // (±1σ) desceu pra linha de apoio — ela responde "quanto tempo dura",
+      // que é só metade.
+      corpo.push(
+        `Que largura rende mais, medido nos seus ${estimate.observedDays.toFixed(0)} dias de histórico (janelas de ${HORIZONTE_BACKTEST_DIAS} dias):`,
+        ""
+      );
+      for (const w of backtest) {
+        const low = currentPrice * Math.exp(-w.halfWidthLog);
+        const high = currentPrice * Math.exp(w.halfWidthLog);
+        const marca = w === melhor ? "  <- melhor" : "";
+        corpo.push(
+          `   ±${(w.halfWidthLog * 100).toFixed(1).padStart(4)}%  ${formatPrice(low)}–${formatPrice(high)}  ` +
+            `em faixa ${(w.timeInRange * 100).toFixed(0).padStart(3)}%  ` +
+            `taxa ${(w.grossApr * 100).toFixed(0).padStart(4)}%  ` +
+            `efetivo ${(w.effectiveApr * 100).toFixed(0).padStart(4)}%${marca}`
+        );
+      }
+      corpo.push(
         "",
-        // Faixa por HORIZONTE em vez de um número solto: a decisão real é
-        // "quanto tempo quero que dure", e largura escala com √t.
-        "Faixa sugerida, por quanto tempo você quer que ela aguente:",
-        ...linhas,
+        `Efetivo = taxa × tempo em faixa. Ficar parado fora da faixa custa menos que perder concentração — por isso o melhor costuma ser mais ESTREITO do que a intuição sugere.`,
         "",
-        `Base: ${estimate.pointCount} pontos de preço reais ao longo de ${estimate.observedDays.toFixed(0)} dias · volatilidade medida de ${(estimate.dailyVolatility * 100).toFixed(2)}%/dia.`,
-        "Cada faixa cobre ~68% dos cenários no seu horizonte (±1 desvio). Faixa mais larga sai de range menos, mas concentra menos liquidez e rende menos taxa — esse trade-off é seu.",
+        // Sem este aviso a tabela empurra pra faixa apertada sem dizer o preço
+        // disso. O backtest só conta tempo em faixa; cada saída exige fechar e
+        // reabrir, e isso custa gas e atenção que não estão em lugar nenhum
+        // acima. Quanto menor o "em faixa", mais vezes por semana isso
+        // acontece.
+        `NÃO ESTÁ NA CONTA: reposicionar. Uma faixa com ${(melhor.timeInRange * 100).toFixed(0)}% de tempo dentro sai de faixa várias vezes por semana, e cada volta custa gas e exige você olhar. Se não pretende reposicionar, escolha pelo "em faixa" alto, não pelo efetivo.`,
         "",
-        disclaimer,
-      ].join("\n")
+        `Base: ${backtest[0]!.windows} janelas sobre ${estimate.pointCount} pontos de preço reais.`
+      );
+    } else {
+      corpo.push(
+        "Não consegui medir a taxa deste pool on-chain agora, então não dá pra anualizar o retorno por largura. Fica só a faixa por horizonte:"
+      );
+    }
+
+    corpo.push(
+      "",
+      "Se preferir escolher por quanto tempo quer que ela aguente:",
+      ...HORIZONS_DAYS.map((dias) => {
+        const r = rangeForHorizon(estimate, currentPrice, dias);
+        return `   ${String(dias).padStart(2)} dia${dias > 1 ? "s" : " "}: ${formatPrice(r.low)} – ${formatPrice(r.high)}  (${(r.widthPct * 100).toFixed(1)}% de largura)`;
+      }),
+      "",
+      `Volatilidade medida: ${(estimate.dailyVolatility * 100).toFixed(2)}%/dia. Cada faixa acima cobre ~68% dos cenários (±1 desvio).`,
+      "",
+      "Isto é backtest, não previsão: mede o que teria acontecido no regime que já passou. Regime muda.",
+      "",
+      disclaimer
     );
+
+    await ctx.reply(corpo.join("\n"));
     return;
   }
 

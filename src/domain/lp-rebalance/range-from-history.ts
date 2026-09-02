@@ -26,10 +26,10 @@
 export type PricePoint = { recordedAt: Date; price: number };
 
 /** Abaixo disso a estimativa é ruído de amostra pequena. */
-const MIN_POINTS = 24;
+export const MIN_POINTS = 24;
 /** Retornos com intervalo maior que isso são buraco de coleta (bot fora do ar),
  *  não movimento contínuo — entram distorcendo a volatilidade pra cima. */
-const MAX_GAP_DAYS = 0.5;
+export const MAX_GAP_DAYS = 0.5;
 
 export type VolatilityEstimate = {
   /** Desvio-padrão do retorno logarítmico diário (0.0167 = 1,67% ao dia). */
