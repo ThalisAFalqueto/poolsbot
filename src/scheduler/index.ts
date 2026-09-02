@@ -5,6 +5,7 @@ import { evaluateAlertsJob } from "./jobs/evaluate-alerts.job.js";
 import { checkPositionsJob } from "./jobs/check-positions.job.js";
 import { snapshotNavJob } from "./jobs/snapshot-nav.job.js";
 import { dailyDigestJob } from "./jobs/daily-digest.job.js";
+import { checkCloseTriggersJob } from "./jobs/check-close-triggers.job.js";
 
 // Cada job roda isolado no seu próprio try/catch — um job falhando não pode
 // impedir os outros de rodarem no mesmo ciclo (antes de existir /status, os
@@ -25,6 +26,11 @@ async function runCycle(): Promise<void> {
   await runJob("ingest-pools", ingestPoolsJob);
   await runJob("evaluate-alerts", evaluateAlertsJob);
   await runJob("check-positions", checkPositionsJob);
+  // Único job que ESCREVE na blockchain. Depois do check-positions de
+  // propósito: se uma posição sumiu, o estado já foi atualizado antes de
+  // tentarmos fechá-la. Sai na primeira linha se não houver gatilho armado
+  // ou se o fechamento não estiver configurado.
+  await runJob("check-close-triggers", checkCloseTriggersJob);
   // Roda no mesmo ciclo de 15min, mas o próprio job sai cedo se já houver
   // foto de hoje — o custo de RPC acontece 1x/dia, não 96x.
   await runJob("snapshot-nav", snapshotNavJob);

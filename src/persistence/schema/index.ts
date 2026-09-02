@@ -506,3 +506,43 @@ export const watchedPairs = pgTable(
     userPairIdx: uniqueIndex("watched_pairs_user_id_pair_key_idx").on(table.userId, table.pairKey),
   })
 );
+
+// Gatilho de FECHAMENTO automático por preço-limite. O usuário define, por
+// posição, "feche se o preço passar de X ou cair abaixo de Y"; o job
+// check-close-triggers compara e, ao disparar, chama o CloseOnlyController.
+//
+// O bot NUNCA abre posição — a garantia é do contrato (não existe código de
+// mint nele), não desta tabela. Ver contracts/src/CloseOnlyController.sol.
+//
+// Identidade composta (chain, protocol, tokenId), como em lp_positions:
+// tokenId só é único dentro de um contrato, e V3/V4 podem colidir.
+export const closeTriggers = pgTable(
+  "close_triggers",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    chain: text("chain").notNull(),
+    protocol: text("protocol").notNull().default("v3"),
+    tokenId: text("token_id").notNull(),
+    // Preços em token1 por token0, mesma unidade do resto do projeto. Os dois
+    // são opcionais: dá pra armar só o piso, só o teto, ou os dois.
+    belowPrice: doublePrecision("below_price"),
+    abovePrice: doublePrecision("above_price"),
+    enabled: boolean("enabled").notNull().default(true),
+    // Preenchido quando o gatilho dispara. Junto com enabled=false, garante
+    // que nunca tentamos fechar duas vezes a mesma posição.
+    firedAt: timestamp("fired_at"),
+    firedTxHash: text("fired_tx_hash"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => ({
+    posIdx: uniqueIndex("close_triggers_user_chain_protocol_token_idx").on(
+      table.userId,
+      table.chain,
+      table.protocol,
+      table.tokenId
+    ),
+  })
+);

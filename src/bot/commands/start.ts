@@ -32,6 +32,8 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/comparar <par> — o mesmo par ranqueado entre chains pelo que cada pool paga DE VERDADE (medido on-chain, não o apyBase); sem argumento, usa os pares que você tem",
       "/watchpair <par> — acompanha um par a mais no resumo diário (/unwatchpair pra remover)",
       "/explicacoes [assunto] — como cada conta do bot é feita: fórmula, exemplo com números reais e o que o número não diz",
+      "/fechar <tokenId> abaixo <preço> acima <preço> — fecha a posição sozinho quando o preço bater no limite (o bot só sabe FECHAR, nunca abrir; os fundos vão direto pra sua wallet)",
+      "/fechamentos — lista os gatilhos de fechamento armados",
     ].join("\n")
   );
 }

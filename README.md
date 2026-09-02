@@ -110,6 +110,7 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
 | `/status` | última execução de cada job |
 | `/explicacoes [assunto]` | como cada conta do bot é feita: fórmula, exemplo real e o que o número **não** diz |
+| `/fechar <tokenId> abaixo <preço> acima <preço>` | fecha a posição sozinho quando o preço bate no limite (`/fechamentos` lista o que está armado) |
 
 ## Dois jeitos de medir resultado
 
@@ -244,6 +245,40 @@ Histórico: a DefiLlama devolve a série diária **desde 2014** numa chamada (~1
 
 
 > Tanto o `/mercado` quanto o `/comparar` respondem com **imagem** (matplotlib, mesma infra do `/graph`), não tabela de texto. Motivo concreto: o Telegram usa fonte proporcional fora de `<pre>`, então alinhamento por espaços sai torto — e o resumo diário chegou a mandar as tags HTML cruas na tela por não passar `parse_mode`. Imagem não depende de fonte, de largura de tela nem de modo de parse. Se o `.venv` não existir na máquina, os dois caem pro texto em vez de falhar.
+
+## Fechamento automático
+
+Única parte do bot que **escreve** na blockchain. Você arma um preço-limite por posição; quando o preço cruza, o bot fecha e os fundos vão pra sua wallet.
+
+**Desligado por padrão.** Sem `CLOSE_AUTOMATION_PRIVATE_KEY` e `CLOSE_CONTROLLER_ARBITRUM` no `.env`, o `/fechar` responde que não está configurado e o bot segue 100% somente-leitura.
+
+### Por que um contrato separado
+
+`contracts/src/CloseOnlyController.sol` é quase a primeira metade do `RebalanceController` — remove liquidez e coleta. Podia ser mais uma função lá. **Não é, de propósito:** `setApprovalForAll` entrega controle de *todas* as posições Uniswap do dono ao contrato aprovado. Aprovar um que só sabe fechar é categoricamente diferente de aprovar um que também sabe abrir posição em ticks arbitrários.
+
+A garantia é **estrutural** (não existe código de mint no arquivo), não configurável.
+
+| o bot consegue | |
+|---|---|
+| fechar sua posição | sim |
+| abrir posição | **não** — não existe esse código |
+| mandar fundos pra outro endereço | **não** — o destino é `npm.ownerOf(tokenId)`, lido na hora, nunca parâmetro |
+
+O pior caso de uma chave de automação vazada é alguém fechar posições na hora errada. Prejuízo possível, roubo não.
+
+### As três travas, todas do dono
+
+1. **`setApprovalForAll`** — é o que liga. Revogar é chamada ERC-721 padrão e **não depende do contrato cooperar**: é o botão de pânico que sempre funciona.
+2. **`setAutomationKey`** — designa a chave do bot, separada da wallet do dono e sem fundos além do gas.
+3. **`setPaused`** — desliga na hora, sem mexer na aprovação.
+
+`amountMin` é calculado **dentro do contrato** a partir do preço validado por TWAP, nunca recebido como parâmetro — uma chave comprometida não consegue passar zero e desligar a proteção de slippage.
+
+### Limitações, ditas no próprio comando
+
+- **15 minutos de ciclo.** O preço pode atravessar o limite e voltar, ou despencar bem além dele, entre duas checagens. Serve pra sair num preço sem pressa; **não** é proteção contra queda rápida.
+- **Contrato não auditado.** O TWAP impede agir sobre preço manipulado, mas não impede a transação ser sanduichada num mempool público — isso depende de como o executor envia a transação.
+- Falha na transação **mantém** o gatilho armado e tenta de novo; só desarma depois de confirmar com sucesso.
 
 ## Estrutura
 

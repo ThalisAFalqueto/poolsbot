@@ -113,6 +113,13 @@
       "when": 1787841430401,
       "tag": "0015_certain_junta",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788363151861,
+      "tag": "0016_last_lucky_pierre",
+      "breakpoints": true
     }
   ]
 }

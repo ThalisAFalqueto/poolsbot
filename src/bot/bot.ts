@@ -21,6 +21,7 @@ import { mesCommand } from "./commands/mes.js";
 import { mercadoCommand } from "./commands/mercado.js";
 import { compararCommand } from "./commands/comparar.js";
 import { explicacoesCommand } from "./commands/explicacoes.js";
+import { fecharCommand, fechamentosCommand } from "./commands/fechar.js";
 import { unwatchPairCommand, watchPairCommand } from "./commands/watchpair.js";
 
 export function createBot(): Bot {
@@ -49,6 +50,8 @@ export function createBot(): Bot {
   bot.command("watchpair", watchPairCommand);
   bot.command("unwatchpair", unwatchPairCommand);
   bot.command("explicacoes", explicacoesCommand);
+  bot.command("fechar", fecharCommand);
+  bot.command("fechamentos", fechamentosCommand);
 
   bot.catch((err) => {
     console.error("Erro não tratado no bot:", err.error);
