@@ -77,11 +77,21 @@ export function backtestWidths(history: PricePoint[], opts: BacktestOptions): Wi
   // larguras — a varredura é a parte cara.
   type Janela = { ini: number; fim: number };
   const janelas: Janela[] = [];
+  const ultimo = ts[sorted.length - 1]!;
   for (let i = 0; i < sorted.length; i++) {
     const alvo = ts[i]! + horizonMs;
+    // Não cabe mais uma janela inteira daqui pra frente.
+    //
+    // A comparação é contra o ÚLTIMO ponto da série, não contra `ts[j]`. Já
+    // foi contra `ts[j]`, e era um bug: `ts[j]` é por definição a última
+    // amostra ANTES do alvo, então `ts[j] < alvo` era quase sempre verdadeiro
+    // e o loop abortava na primeira iteração. Passou nos testes porque as
+    // séries sintéticas tinham espaçamento exato (7 dias é múltiplo inteiro de
+    // 15min), e aí a igualdade acontecia. Com timestamp de bloco real, que é
+    // irregular, o backtest devolvia null pra todo pool.
+    if (ultimo < alvo) break;
     let j = i;
     while (j + 1 < sorted.length && ts[j + 1]! <= alvo) j++;
-    if (ts[j]! < alvo) break; // daqui pra frente não cabe mais uma janela inteira
 
     // Buraco de coleta (bot fora do ar) invalida a janela: não dá pra saber se
     // o preço saiu da faixa enquanto ninguém estava olhando.

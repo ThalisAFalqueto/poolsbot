@@ -104,6 +104,40 @@ describe("backtestWidths", () => {
   });
 });
 
+// REGRESSÃO: a série sintética acima tem espaçamento EXATO, e 7 dias é
+// múltiplo inteiro de 15min — então sempre existia uma amostra caindo
+// precisamente no fim da janela. Isso mascarou um bug que só aparecia com
+// timestamp de bloco real (irregular): a condição de parada comparava contra a
+// última amostra ANTES do alvo, que é sempre menor que ele, e o backtest
+// devolvia null pra TODO pool com dado de verdade.
+describe("timestamps irregulares (como bloco real)", () => {
+  function irregular(dias: number, passoMedioMin = 60): PricePoint[] {
+    const n = Math.round((dias * 1440) / passoMedioMin);
+    let t = BASE.getTime();
+    let s = 99;
+    const out: PricePoint[] = [];
+    for (let i = 0; i < n; i++) {
+      s = (s * 1103515245 + 12345) % 2147483648;
+      // jitter de ±40% no intervalo, e nunca alinhado a minuto redondo
+      const jitter = ((s % 1000) / 1000 - 0.5) * 0.8;
+      t += passoMedioMin * 60_000 * (1 + jitter) + 137;
+      out.push({ recordedAt: new Date(Math.round(t)), price: 2400 + ((s % 200) - 100) });
+    }
+    return out;
+  }
+
+  it("roda com timestamps que nunca caem exatamente no fim da janela", () => {
+    const r = backtestWidths(irregular(45), OPTS);
+    expect(r).not.toBeNull();
+    expect(r![0]!.windows).toBeGreaterThan(50);
+  });
+
+  it("produz o mesmo número de larguras pedidas", () => {
+    const r = backtestWidths(irregular(45), OPTS)!;
+    expect(r).toHaveLength(OPTS.widths.length);
+  });
+});
+
 describe("bestWidth", () => {
   it("devolve a de maior retorno efetivo", () => {
     const r = backtestWidths(passeio(40, 0.02), OPTS)!;
