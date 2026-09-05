@@ -4,6 +4,7 @@ import { fetchAllPools } from "../../data/defillama/client.js";
 import { renderPairPlot, type PairPlotInput } from "../../data/chart/plot-pairs.js";
 import { comparePoolsForPair, measuredSpread, normalizePairKey, rankPools, type ComparedPool } from "../../domain/market/pair-compare.js";
 import { DEFAULT_REFERENCE, type ReferencePosition } from "../../domain/market/fee-per-liquidity.js";
+import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
 import { measurePoolYields, MEASURE_WINDOW_DAYS, type PoolMeasurement } from "../../data/onchain/measure-pool-yield.js";
 import { listPositionPairSymbols } from "../../persistence/repositories/lp-positions.repository.js";
 import { listWatchedPairs } from "../../persistence/repositories/market.repository.js";
@@ -197,7 +198,7 @@ export async function compararCommand(ctx: CommandContext<Context>) {
 
   const allPools = await fetchAllPools();
   const comparable = allPools
-    .filter((p) => p.tvlUsd >= MIN_TVL_USD && !p.outlier)
+    .filter((p) => p.tvlUsd >= MIN_TVL_USD && !shouldDropAsOutlier(p))
     .map((p) => ({
       poolId: p.pool,
       chain: p.chain,

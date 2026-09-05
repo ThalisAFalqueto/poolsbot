@@ -237,6 +237,8 @@ O ranking é pela **taxa medida**, e o resultado sai em duas listas:
 
 Sem a separação, o topo virava um `RAIN-USDT` com 1781%/ano cuja faixa dura 1 hora. A duração vem de `dias = (δ/σ)²`, a inversa do `move = σ√t` do `/range`, com σ de 49 amostras de tick na janela (um multicall por bloco, por chain).
 
+> **O flag `outlier` da DefiLlama é ignorado** nas pools que o bot mede on-chain. Ele sinaliza APY estatisticamente estranho — derivado do mesmo `apyBase` que já não serve pra posição concentrada, e que numa pool concentrada é ruidoso por construção. Medido em 05/09/2026, ele barrava **8 pools na Arbitrum ($60M)** e **21 na Base ($171M)**, incluindo as maiores de ETH (`WETH-USDC` v3 0.05% de $36,1M na Arbitrum, e a de $116,7M na Base). Na Base era mais da metade das pools concentradas. Onde o bot não mede, o flag continua valendo — ver `src/domain/yield-optimizer/outlier.ts`.
+
 > O `score` multiplicativo (`apy × 5 fatores`) foi **removido**: existia pra ajustar o `apy` da DefiLlama, e com o número medido em mãos multiplicá-lo por fatores opacos só esconderia de onde veio a ordem. Segurança continua como **filtro binário e explicável** (TVL ≥ $1M, APY ≤ 1,5x a média de 30d).
 
 > Cross-chain, o mesmo token tem **contrato diferente em cada chain** — casar por endereço não funciona. A chave é o símbolo normalizado (ordenado, com um mapa mínimo de apelidos). `USDC.e` não é `USDC`: são ponte e nativo, com liquidez e risco distintos, e há teste garantindo que não sejam misturados.

@@ -3,6 +3,7 @@ import { fetchAllPools } from "../../data/defillama/client.js";
 import { MEASURE_WINDOW_DAYS, REFERENCE_USD, measurePoolYields, type PoolMeasurement } from "../../data/onchain/measure-pool-yield.js";
 import { DEFAULT_REFERENCE } from "../../domain/market/fee-per-liquidity.js";
 import { isConcentrated, isMeasurableConcentrated } from "../../domain/yield-optimizer/concentrated.js";
+import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
 import { isEligiblePool, MAX_APY_VS_MEAN30D_RATIO, MIN_TVL_USD } from "../../domain/yield-optimizer/eligibility.js";
 
 // /yield: pools de LIQUIDEZ CONCENTRADA de uma chain, ranqueadas pelo que
@@ -125,7 +126,7 @@ export async function yieldCommand(ctx: CommandContext<Context>) {
   const doTipoCerto = pools
     .filter((p) => p.chain.toLowerCase() === chain.toLowerCase())
     .filter((p) => !symbol || p.symbol.toLowerCase().includes(symbol.toLowerCase()))
-    .filter((p) => !p.outlier)
+    .filter((p) => !shouldDropAsOutlier(p))
     .filter((p) => isConcentrated(p.project));
 
   if (doTipoCerto.length === 0) {

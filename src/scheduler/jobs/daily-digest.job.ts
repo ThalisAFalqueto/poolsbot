@@ -14,6 +14,7 @@ import {
 import { formatMarketRegime } from "../../bot/commands/mercado.js";
 import { preparePairComparison } from "../../bot/commands/comparar.js";
 import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
+import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
 import { renderMarketPlot } from "../../data/chart/plot-market.js";
 import { renderPairPlot } from "../../data/chart/plot-pairs.js";
 import { InputFile } from "grammy";
@@ -98,7 +99,7 @@ async function buildDigest(userId: number): Promise<DigestBlock[]> {
   const monitorable = getActiveChains().map((c) => chains[c].defillamaChainName);
   const allPools = await fetchAllPools();
   const comparable = allPools
-    .filter((p) => p.tvlUsd >= MIN_TVL_USD && !p.outlier)
+    .filter((p) => p.tvlUsd >= MIN_TVL_USD && !shouldDropAsOutlier(p))
     .map((p) => ({
       poolId: p.pool,
       chain: p.chain,
