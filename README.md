@@ -260,7 +260,10 @@ Duas camadas de correção, porque uma só fecharia a causa e não a classe:
 
 `deleteStalePositions` virou `deleteConfirmedClosedPositions` e recebe a lista explícita do que foi confirmado, em vez de derivar de "não está no conjunto ativo".
 
-O dado foi recuperado com `src/scripts/repair-false-close.ts` — a data e o gas certos tinham sobrevivido na própria linha fantasma.
+O dado foi recuperado com dois scripts:
+
+- `src/scripts/repair-false-close.ts` — data de abertura e gas de mint, que tinham sobrevivido na própria linha fantasma;
+- `src/scripts/repair-il-baseline.ts` — o **baseline de IL**, relido da chain. O baseline guarda o preço do pool na abertura; recriado, ele nasce com o preço de hoje e o IL passa a medir a partir da data errada. O preço certo está no bloco da transação de mint, cujo hash está em `lp_positions.mint_gas_tx_hash` — mesma leitura histórica de `slot0` que o `backfill-price-onchain.ts` já fazia.
 
 ## Fechamento automático
 
