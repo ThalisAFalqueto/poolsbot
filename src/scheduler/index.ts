@@ -39,5 +39,5 @@ async function runCycle(): Promise<void> {
 export function startScheduler(): void {
   cron.schedule("*/15 * * * *", runCycle);
   void runCycle(); // roda uma vez no boot, sem esperar 15min pro primeiro ciclo
-  console.log("Scheduler iniciado: ingestão + avaliação de alertas + posições LP a cada 15min.");
+  console.log("Scheduler iniciado: ingestão + posições LP + gatilhos de fechamento a cada 15min.");
 }
