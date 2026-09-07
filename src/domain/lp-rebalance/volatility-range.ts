@@ -41,7 +41,15 @@ export const VOLATILITY_WINDOWS: VolatilityWindow[] = [
 // ---------------------------------------------------------------------
 // Margem de segurança adicionada em cada lado do range observado.
 //
-// Direção inspirada em Fukasawa, Maire & Wunsch (arXiv:2309.08431),
+// Direção inspirada em Cartea, Drissi & Monga, "Decentralised Finance and
+// Automated Market Making: Predictable Loss and Optimal Liquidity Provision"
+// (arXiv:2309.08431). O δ* usado aqui é o caso SEM DRIFT do Teorema 1 deles,
+// que na forma geral é δ* = (2γ + μ²σ²)/(4π − σ²/2 + μ(μ − σ²/2)); com μ = 0
+// isso vira δ* = 4γ/(8π − σ²), que é o que está implementado abaixo.
+//
+// (Este comentário já atribuiu o paper a "Fukasawa, Maire & Wunsch" — errado.
+// Conferido na fonte em 28/08/2026: os autores são Cartea, Drissi e Monga.)
+//
 // δ* = 4γ/(8π − σ²): a largura ótima de uma posição concentrada CRESCE
 // com o custo de rebalancear (γ) e com a variância do preço (σ²), e CAI
 // com a taxa de fee do pool (π) — quanto mais a pool paga por

@@ -111,6 +111,7 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/status` | última execução de cada job |
 | `/explicacoes [assunto]` | como cada conta do bot é feita: fórmula, exemplo real e o que o número **não** diz |
 | `/fechar <tokenId> abaixo <preço> acima <preço>` | fecha a posição sozinho quando o preço bate no limite (`/fechamentos` lista o que está armado) |
+| `/bordaalerta on\|off` | aviso quando o preço entra nos 15% finais da faixa — **desligado por padrão** |
 
 ## Dois jeitos de medir resultado
 

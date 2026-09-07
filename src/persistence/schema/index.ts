@@ -17,6 +17,11 @@ export const users = pgTable(
   {
     id: serial("id").primaryKey(),
     telegramChatId: text("telegram_chat_id").notNull(),
+    // Aviso de que a posição está CHEGANDO na borda (antes de sair). Desligado
+    // por padrão: o usuário chegou a dizer que não queria, e mudou de ideia
+    // depois — em vez de adivinhar qual das duas vale, ele liga com
+    // /bordaalerta. Ver domain/lp-rebalance/near-edge.ts.
+    nearEdgeAlerts: boolean("near_edge_alerts").notNull().default(false),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => ({
@@ -319,6 +324,10 @@ export const lpPositionState = pgTable(
     status: lpPositionStatusEnum("status").notNull().default("in_range"),
     outOfRangeSince: timestamp("out_of_range_since"),
     lastNotifiedAt: timestamp("last_notified_at"),
+    // Cadência do aviso de borda, SEPARADA de lastNotifiedAt. Se dividisse o
+    // mesmo campo, um aviso de borda silenciaria o lembrete de fora-de-faixa
+    // (e vice-versa) — dois eventos diferentes disputando o mesmo relógio.
+    nearEdgeNotifiedAt: timestamp("near_edge_notified_at"),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => ({

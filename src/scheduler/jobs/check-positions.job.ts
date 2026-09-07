@@ -8,7 +8,11 @@ import { evaluateIlAlert, type IlAlertState } from "../../domain/lp-rebalance/ev
 import { evaluatePosition, isSafelyInRange } from "../../domain/lp-rebalance/evaluate-position.js";
 import { formatIlLine } from "../../domain/lp-rebalance/format-reason.js";
 import { getAmountsForLiquidity } from "../../domain/lp-rebalance/liquidity-math.js";
-import { isInRange, sqrtPriceX96ToPrice } from "../../domain/lp-rebalance/price-math.js";
+import { isInRange, sqrtPriceX96ToPrice, tickToPrice } from "../../domain/lp-rebalance/price-math.js";
+import { edgeProximity, isNearEdge } from "../../domain/lp-rebalance/near-edge.js";
+import { formatPrice } from "../../domain/lp-rebalance/format-reason.js";
+import { telegramChannel } from "../../notifications/channels/telegram.channel.js";
+import { getNearEdgeAlerts } from "../../persistence/repositories/users.repository.js";
 import { suggestRange } from "../../domain/lp-rebalance/range-suggestion.js";
 import type { OnchainPosition, PositionRangeSuggestion, PositionState } from "../../domain/lp-rebalance/types.js";
 import {
@@ -37,6 +41,11 @@ import {
   type CloseGasResult,
 } from "../../persistence/repositories/lp-positions.repository.js";
 import { insertPriceHistory } from "../../persistence/repositories/pool-price-history.repository.js";
+import { getNearEdgeNotifiedAt, setNearEdgeNotifiedAt } from "../../persistence/repositories/lp-positions.repository.js";
+
+/** Cadência do aviso de borda. 6h é o mesmo ritmo do lembrete de fora-de-faixa
+ *  — chegar perto da borda não é notícia nova a cada 15min. */
+const NEAR_EDGE_REMINDER_MS = 6 * 3600 * 1000;
 
 type UserGroup = { userId: number; telegramChatId: string; addresses: Address[] };
 
@@ -162,6 +171,8 @@ export async function checkPositionsJob(): Promise<string> {
   const recordedPricePools = new Set<string>();
 
   for (const user of users) {
+    // Uma leitura por usuário, não por posição.
+    const avisaBorda = await getNearEdgeAlerts(user.userId);
     // fetchPositionsForWallets já isola falha de RPC por wallet e por chain
     // (não lança, só omite o que falhou) — o try/catch externo aqui é uma
     // segunda camada de defesa (qualquer falha inesperada na própria
@@ -321,6 +332,44 @@ export async function checkPositionsJob(): Promise<string> {
             await dispatchSignal(signal, user.telegramChatId);
             executeSignal(signal);
             notifiedCount += 1;
+          }
+
+          // Aviso de APROXIMAÇÃO da borda — antes de sair, não depois.
+          //
+          // Fica FORA da máquina de estado de evaluatePosition de propósito.
+          // Aquela já causou um crash em produção (27/08/2026) por dois
+          // critérios divergentes de "está em faixa"; aqui a pergunta é outra
+          // ("quão perto da borda"), com relógio próprio e função pura, e os
+          // dois nunca podem discordar sobre a mesma coisa.
+          //
+          // Desligado por usuário até ele ligar com /bordaalerta.
+          if (avisaBorda && isNearEdge(position.currentTick, position.tickLower, position.tickUpper)) {
+            const ultimoAviso = await getNearEdgeNotifiedAt(record.id);
+            if (!ultimoAviso || now.getTime() - ultimoAviso.getTime() >= NEAR_EDGE_REMINDER_MS) {
+              const p = edgeProximity(position.currentTick, position.tickLower, position.tickUpper)!;
+              const borda = p.side === "upper" ? "TETO" : "PISO";
+              const precoAtual = sqrtPriceX96ToPrice(position.sqrtPriceX96, position.token0.decimals, position.token1.decimals);
+              const precoBorda = tickToPrice(
+                p.side === "upper" ? position.tickUpper : position.tickLower,
+                position.token0.decimals,
+                position.token1.decimals
+              );
+              await telegramChannel.send(
+                user.telegramChatId,
+                [
+                  `⚠️ Posição #${tokenId} (${position.token0.symbol}/${position.token1.symbol}) está chegando no ${borda}.`,
+                  `Preço agora ${formatPrice(precoAtual)} · borda em ${formatPrice(precoBorda)} · falta ${(Math.abs(precoBorda / precoAtual - 1) * 100).toFixed(2)}%.`,
+                  "",
+                  "Se sair, você para de ganhar taxa até voltar. Isso é aviso, não recomendação — esperar costuma ser razoável quando a folga é pequena.",
+                ].join("\n")
+              );
+              await setNearEdgeNotifiedAt(record.id, now);
+              notifiedCount += 1;
+            }
+          } else if (avisaBorda) {
+            // Voltou pro meio: zera o relógio pra o próximo avanço até a borda
+            // avisar de novo, em vez de ficar em silêncio pelas próximas 6h.
+            await setNearEdgeNotifiedAt(record.id, null);
           }
 
           // Alerta de IL — independente do estado de range (uma posição pode

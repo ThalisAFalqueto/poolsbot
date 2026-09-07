@@ -34,6 +34,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/explicacoes [assunto] — como cada conta do bot é feita: fórmula, exemplo com números reais e o que o número não diz",
       "/fechar <tokenId> abaixo <preço> acima <preço> — fecha a posição sozinho quando o preço bater no limite (o bot só sabe FECHAR, nunca abrir; os fundos vão direto pra sua wallet)",
       "/fechamentos — lista os gatilhos de fechamento armados",
+      "/bordaalerta on|off — aviso quando o preço se aproxima da borda da sua faixa (desligado por padrão)",
     ].join("\n")
   );
 }

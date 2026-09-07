@@ -21,3 +21,15 @@ export async function findOrCreateUserByTelegramChatId(chatId: string) {
   }
   return row;
 }
+
+/** Liga/desliga o aviso de aproximação da borda pro usuário. Devolve o estado
+ *  novo, pra quem chama poder confirmar sem uma segunda consulta. */
+export async function setNearEdgeAlerts(userId: number, enabled: boolean): Promise<boolean> {
+  await db.update(users).set({ nearEdgeAlerts: enabled }).where(eq(users.id, userId));
+  return enabled;
+}
+
+export async function getNearEdgeAlerts(userId: number): Promise<boolean> {
+  const [row] = await db.select({ on: users.nearEdgeAlerts }).from(users).where(eq(users.id, userId)).limit(1);
+  return row?.on ?? false;
+}

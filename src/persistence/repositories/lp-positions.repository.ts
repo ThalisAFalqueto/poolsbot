@@ -516,3 +516,21 @@ export async function listClosedPositions(userId: number): Promise<ClosedPositio
     .where(eq(closedLpPositions.userId, userId))
     .orderBy(desc(closedLpPositions.closedAt));
 }
+
+// ---------------------------------------------------------------------
+// Aviso de aproximação da borda. Cadência PRÓPRIA, separada de
+// lastNotifiedAt: são dois eventos diferentes (chegando na borda vs já fora),
+// e dividir o mesmo relógio faria um silenciar o outro.
+
+export async function getNearEdgeNotifiedAt(lpPositionId: number): Promise<Date | null> {
+  const [row] = await db
+    .select({ at: lpPositionState.nearEdgeNotifiedAt })
+    .from(lpPositionState)
+    .where(eq(lpPositionState.lpPositionId, lpPositionId))
+    .limit(1);
+  return row?.at ?? null;
+}
+
+export async function setNearEdgeNotifiedAt(lpPositionId: number, at: Date | null): Promise<void> {
+  await db.update(lpPositionState).set({ nearEdgeNotifiedAt: at }).where(eq(lpPositionState.lpPositionId, lpPositionId));
+}
