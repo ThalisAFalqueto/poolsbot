@@ -100,14 +100,12 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/labelposition <tokenId> <nome>` | apelido pra usar no `/graph` |
 | `/closed` | posições já fechadas, com P&L final e gas |
 | `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
-| `/mercado` | gráfico do volume de DEXs + percentil vs 90 dias |
-| `/comparar <par>` | gráfico do mesmo par entre chains, ranqueado pelo que cada pool **paga de verdade** (medido on-chain) |
-| `/watchpair <par>` | acompanha um par a mais no resumo diário |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/yield <chain>` | pools de liquidez concentrada ranqueadas pelo que pagam **de verdade** + quanto a faixa dura |
-| `/find`, `/pool` | busca e detalhe de pools (dados da DefiLlama) |
-| `/watch`, `/unwatch`, `/alerts`, `/unalert` | alertas de APY/TVL/volume |
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
+| `/comparar <par>` | mesmo par entre chains, medido on-chain (+ gráfico) |
+| `/watch <id>`, `/unwatch <id>` | grava o histórico de APY/TVL de uma pool |
+| `/sites` | onde olhar pool na internet, e o aviso sobre a coluna de APR |
 | `/status` | última execução de cada job |
 | `/explicacoes [assunto]` | como cada conta do bot é feita: fórmula, exemplo real e o que o número **não** diz |
 | `/fechar <tokenId> abaixo <preço> acima <preço>` | fecha a posição sozinho quando o preço bate no limite (`/fechamentos` lista o que está armado) |
@@ -282,6 +280,24 @@ O pior caso de uma chave de automação vazada é alguém fechar posições na h
 - **15 minutos de ciclo.** O preço pode atravessar o limite e voltar, ou despencar bem além dele, entre duas checagens. Serve pra sair num preço sem pressa; **não** é proteção contra queda rápida.
 - **Contrato não auditado.** O TWAP impede agir sobre preço manipulado, mas não impede a transação ser sanduichada num mempool público — isso depende de como o executor envia a transação.
 - Falha na transação **mantém** o gatilho armado e tenta de novo; só desarma depois de confirmar com sucesso.
+
+## O que foi removido, e por quê
+
+Limpeza de 07/09/2026. O critério: **fica o que o bot faz melhor que um site.**
+
+| saiu | substituído por |
+|---|---|
+| `/find`, `/pool` | DefiLlama Yields, GeckoTerminal |
+| `/mercado` | DefiLlama DEXs (o gráfico continua no resumo diário) |
+| `/alerts`, `/unalert` | — alertas de queda de APY/TVL de pool, nunca usados |
+| `/watchpair`, `/unwatchpair` | os pares saem das próprias posições |
+| job `evaluate-alerts` | — só servia às regras removidas |
+| tabelas `alert_rules`, `alert_state`, `watched_pairs` | — |
+| tabela `pool_volume_history` | — escrita e **nunca lida**, achado da auditoria de agosto |
+
+`/watch` continua, mas mudou de sentido: antes criava 3 regras de alerta, agora só registra a pool pra o `ingest-pools` gravar o histórico de APY/TVL dela. É a única coisa ali que nenhum site faz por você.
+
+Ficaram `/yield`, `/comparar` e `/range` — são os únicos lugares que medem **taxa por unidade de liquidez ativa** em vez de taxa ÷ TVL, e essa diferença chega a 4x.
 
 ## Estrutura
 

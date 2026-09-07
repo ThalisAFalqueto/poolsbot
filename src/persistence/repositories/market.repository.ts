@@ -1,9 +1,12 @@
 import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { db } from "../db.js";
-import { marketVolumeHistory, watchedPairs } from "../schema/index.js";
+import { marketVolumeHistory } from "../schema/index.js";
 
-// Volume agregado de mercado + pares acompanhados. Ver o comentário das
-// tabelas em schema/index.ts pro desenho.
+// Volume agregado de mercado — alimenta o gráfico do resumo diário.
+//
+// Já guardava também os "pares acompanhados" (/watchpair), removidos na
+// limpeza de 07/09/2026: a tabela vivia vazia, e o resumo diário passou a
+// tirar os pares das próprias posições do usuário.
 
 export type MarketVolumeRow = { date: string; volumeUsd: number };
 
@@ -31,28 +34,5 @@ export async function findLatestMarketVolumeDate(): Promise<string | null> {
   return row?.date ?? null;
 }
 
-export async function listWatchedPairs(userId: number): Promise<string[]> {
-  const rows = await db
-    .select({ pairKey: watchedPairs.pairKey })
-    .from(watchedPairs)
-    .where(eq(watchedPairs.userId, userId))
-    .orderBy(asc(watchedPairs.pairKey));
-  return rows.map((r) => r.pairKey);
-}
 
-export async function watchPair(userId: number, pairKey: string): Promise<{ isNew: boolean }> {
-  const inserted = await db
-    .insert(watchedPairs)
-    .values({ userId, pairKey })
-    .onConflictDoNothing()
-    .returning({ id: watchedPairs.id });
-  return { isNew: inserted.length > 0 };
-}
 
-export async function unwatchPair(userId: number, pairKey: string): Promise<boolean> {
-  const deleted = await db
-    .delete(watchedPairs)
-    .where(and(eq(watchedPairs.userId, userId), eq(watchedPairs.pairKey, pairKey)))
-    .returning({ id: watchedPairs.id });
-  return deleted.length > 0;
-}

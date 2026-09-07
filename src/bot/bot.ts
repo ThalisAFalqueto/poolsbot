@@ -1,12 +1,9 @@
 import { Bot } from "grammy";
 import { env } from "../config/env.js";
 import { startCommand } from "./commands/start.js";
-import { poolCommand } from "./commands/pool.js";
-import { findCommand } from "./commands/find.js";
+import { sitesCommand } from "./commands/sites.js";
 import { watchCommand } from "./commands/watch.js";
 import { unwatchCommand } from "./commands/unwatch.js";
-import { alertsCommand } from "./commands/alerts.js";
-import { unalertCommand } from "./commands/unalert.js";
 import { yieldCommand } from "./commands/yield.js";
 import { addWalletCommand } from "./commands/addwallet.js";
 import { walletsCommand } from "./commands/wallets.js";
@@ -18,23 +15,18 @@ import { graphCommand } from "./commands/graph.js";
 import { labelPositionCommand } from "./commands/labelposition.js";
 import { closedCommand } from "./commands/closed.js";
 import { mesCommand } from "./commands/mes.js";
-import { mercadoCommand } from "./commands/mercado.js";
 import { compararCommand } from "./commands/comparar.js";
 import { explicacoesCommand } from "./commands/explicacoes.js";
 import { fecharCommand, fechamentosCommand } from "./commands/fechar.js";
 import { bordaAlertaCommand } from "./commands/bordaalerta.js";
-import { unwatchPairCommand, watchPairCommand } from "./commands/watchpair.js";
 
 export function createBot(): Bot {
   const bot = new Bot(env.telegramBotToken);
 
   bot.command("start", startCommand);
-  bot.command("pool", poolCommand);
-  bot.command("find", findCommand);
+  bot.command("sites", sitesCommand);
   bot.command("watch", watchCommand);
   bot.command("unwatch", unwatchCommand);
-  bot.command("alerts", alertsCommand);
-  bot.command("unalert", unalertCommand);
   bot.command("yield", yieldCommand);
   bot.command("addwallet", addWalletCommand);
   bot.command("wallets", walletsCommand);
@@ -46,10 +38,7 @@ export function createBot(): Bot {
   bot.command("labelposition", labelPositionCommand);
   bot.command("closed", closedCommand);
   bot.command("mes", mesCommand);
-  bot.command("mercado", mercadoCommand);
   bot.command("comparar", compararCommand);
-  bot.command("watchpair", watchPairCommand);
-  bot.command("unwatchpair", unwatchPairCommand);
   bot.command("explicacoes", explicacoesCommand);
   bot.command("fechar", fecharCommand);
   bot.command("fechamentos", fechamentosCommand);

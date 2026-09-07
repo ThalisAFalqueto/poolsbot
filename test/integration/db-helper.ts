@@ -4,8 +4,6 @@ import { db } from "../../src/persistence/db.js";
 const TABLES = [
   "users",
   "watched_pools",
-  "alert_rules",
-  "alert_state",
   "apy_history",
   "lp_positions",
   "lp_position_state",

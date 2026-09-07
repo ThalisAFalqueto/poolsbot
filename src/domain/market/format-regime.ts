@@ -1,16 +1,14 @@
-import { InputFile, type CommandContext, type Context } from "grammy";
-import { fetchMarketVolumeNow, type MarketVolumeNow } from "../../data/defillama/dexs.js";
-import { analyzeMarketRegime, type MarketRegime } from "../../domain/market/regime.js";
-import { TARGET_MONTHLY_PCT } from "../../domain/portfolio/target.js";
-import { renderMarketPlot } from "../../data/chart/plot-market.js";
-import { listMarketVolumeSince } from "../../persistence/repositories/market.repository.js";
+import type { MarketVolumeNow } from "../../data/defillama/dexs.js";
+import { TARGET_MONTHLY_PCT } from "../portfolio/target.js";
+import type { MarketRegime } from "./regime.js";
 
-// Leitura de regime do mercado — contexto pra o usuário decidir SE ajusta a
-// meta. O bot nunca mexe nela sozinho (decisão dele, ver o plano): um número
-// que baliza decisão precisa ser estável e auditável entre meses.
-
-/** Janela lida do banco. Precisa cobrir os 90 dias do percentil com folga. */
-const LOOKBACK_DAYS = 200;
+// Texto da leitura de regime de mercado.
+//
+// Mora no domínio, e não no comando, porque o comando /mercado foi REMOVIDO na
+// limpeza de 07/09/2026 (os sites fazem isso melhor) mas o resumo diário
+// continua mandando o gráfico e o texto — o usuário recebe passivamente sem
+// precisar pedir. Deixar a formatação dentro de um arquivo de comando fazia o
+// job importar de bot/commands/, que é dependência na direção errada.
 
 function formatBillions(usd: number): string {
   return `$${(usd / 1e9).toFixed(2)}B`;
@@ -58,34 +56,4 @@ export function formatMarketRegime(regime: MarketRegime, now: MarketVolumeNow): 
     // justamente essa combinação que interessa — por isso as duas aparecem.
     "* Percentil é o patamar frente aos últimos 90 dias; as variações de 1d/7d são a direção recente. Um mercado pode estar num patamar alto e caindo ao mesmo tempo.",
   ].join("\n");
-}
-
-/** Janela DESENHADA no gráfico — menor que a lida do banco (que precisa dos
- *  90 dias do percentil + 30 da média móvel). 120 dias mostram a mudança de
- *  regime sem espremer a linha. */
-const CHART_DAYS = 120;
-
-export async function mercadoCommand(ctx: CommandContext<Context>) {
-  const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
-  const [series, now] = await Promise.all([listMarketVolumeSince(since), fetchMarketVolumeNow()]);
-  const regime = analyzeMarketRegime(series);
-
-  // Gráfico primeiro, texto depois: a imagem é o que dá a leitura imediata
-  // (foi o que o usuário pediu), o texto é o detalhe numérico.
-  if (series.length > 0) {
-    try {
-      const png = await renderMarketPlot({
-        history: series.slice(-CHART_DAYS),
-        percentile: regime.available ? regime.percentile : null,
-        label: regime.available ? regime.label : "sem leitura",
-      });
-      await ctx.replyWithPhoto(new InputFile(png, "mercado.png"));
-    } catch (err) {
-      // Gráfico é enriquecimento — se o .venv não estiver configurado nesta
-      // máquina, o comando continua útil em texto em vez de não responder.
-      console.error("[mercado] falha ao gerar gráfico:", err);
-    }
-  }
-
-  await ctx.reply(formatMarketRegime(regime, now));
 }

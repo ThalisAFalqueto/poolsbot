@@ -76,50 +76,6 @@ export const alertMetricEnum = pgEnum("alert_metric", [
 ]);
 
 export const alertStatusEnum = pgEnum("alert_status", ["ok", "triggered"]);
-
-export const alertRules = pgTable(
-  "alert_rules",
-  {
-    id: serial("id").primaryKey(),
-    watchedPoolId: integer("watched_pool_id")
-      .notNull()
-      .references(() => watchedPools.id, { onDelete: "cascade" }),
-    metric: alertMetricEnum("metric").notNull(),
-    thresholdValue: doublePrecision("threshold_value").notNull(),
-    // null para métricas absolutas e reward_apy_ending (que sempre compara vs. snapshot anterior)
-    windowHours: integer("window_hours"),
-    reminderIntervalHours: integer("reminder_interval_hours").notNull().default(6),
-    isDefault: boolean("is_default").notNull().default(false),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-  },
-  (table) => ({
-    watchedPoolIdx: index("alert_rules_watched_pool_id_idx").on(table.watchedPoolId),
-  })
-);
-
-// Estado de disparo separado da definição da regra: alertRules é escrita
-// raramente (usuário criando/removendo), alertState é escrita a cada ciclo
-// de 15min para toda regra ativa.
-export const alertState = pgTable(
-  "alert_state",
-  {
-    id: serial("id").primaryKey(),
-    alertRuleId: integer("alert_rule_id")
-      .notNull()
-      .references(() => alertRules.id, { onDelete: "cascade" }),
-    status: alertStatusEnum("status").notNull().default("ok"),
-    lastValue: doublePrecision("last_value"),
-    triggeredAt: timestamp("triggered_at"),
-    lastNotifiedAt: timestamp("last_notified_at"),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
-  },
-  (table) => ({
-    alertRuleIdx: uniqueIndex("alert_state_alert_rule_id_idx").on(table.alertRuleId),
-  })
-);
-
-// Série temporal de APY/TVL por pool. Candidata a hypertable do TimescaleDB
-// (docker-compose já usa a imagem timescaledb) quando o volume justificar.
 export const apyHistory = pgTable(
   "apy_history",
   {
@@ -144,38 +100,6 @@ export const apyHistory = pgTable(
     poolIdRecordedAtIdx: index("apy_history_pool_id_recorded_at_idx").on(table.poolId, table.recordedAt),
   })
 );
-
-// Volume diário por pool — granularidade de DIA (não a cada 15min como
-// apy_history), é o que a detecção de pico de volume (tipo wash trading,
-// regra de +500% dia-sobre-dia) precisa. Duas fontes possíveis: backfill
-// pontual via Dune (script manual, roda uma vez, alta precisão — soma
-// exata dos swaps do dia) ou ingestão contínua via DefiLlama (job de
-// 15min, grava 1x/dia o volumeUsd1d que já vem de graça na mesma chamada
-// que abastece apy_history) — "source" existe pra não confundir as duas
-// precisões na hora de debugar.
-export const poolVolumeHistory = pgTable(
-  "pool_volume_history",
-  {
-    id: serial("id").primaryKey(),
-    poolId: text("pool_id").notNull(), // mesmo id da DefiLlama usado em watchedPools/apyHistory
-    date: date("date").notNull(),
-    volumeUsd: doublePrecision("volume_usd").notNull(),
-    source: text("source").notNull(), // "dune_backfill" | "defillama_ingest"
-    recordedAt: timestamp("recorded_at").notNull().defaultNow(),
-  },
-  (table) => ({
-    poolIdDateIdx: uniqueIndex("pool_volume_history_pool_id_date_idx").on(table.poolId, table.date),
-  })
-);
-
-// Preço ao longo do tempo, por pool — usado pro gráfico de linha do /graph
-// (mesmo espírito de pool_volume_history, mas chaveado por (chain,
-// poolAddress) em vez do poolId da DefiLlama: as duas fontes de escrita
-// (backfill via Dune, ingestão contínua) já têm o endereço on-chain do
-// pool em mãos — DefiLlama não entra no caminho aqui, então não faz
-// sentido depender do id dela. Sem índice único: cada escrita tem um
-// recordedAt genuinamente distinto (bucket de hora no backfill, ciclo de
-// 15min na ingestão contínua), não precisa de dedup.
 export const poolPriceHistory = pgTable(
   "pool_price_history",
   {
@@ -495,36 +419,6 @@ export const marketVolumeHistory = pgTable(
     dateIdx: uniqueIndex("market_volume_history_date_idx").on(table.date),
   })
 );
-
-// Pares que o usuário quer acompanhar na comparação entre chains, ALÉM dos
-// que ele já tem em posição (esses saem das próprias posições, sem precisar
-// configurar nada). Guardado como chave NORMALIZADA (símbolos ordenados, ex:
-// "USDC-WBTC") porque cross-chain não dá pra casar por endereço: o mesmo token
-// tem contrato diferente em cada chain. Ver domain/market/pair-compare.ts.
-export const watchedPairs = pgTable(
-  "watched_pairs",
-  {
-    id: serial("id").primaryKey(),
-    userId: integer("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    pairKey: text("pair_key").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-  },
-  (table) => ({
-    userPairIdx: uniqueIndex("watched_pairs_user_id_pair_key_idx").on(table.userId, table.pairKey),
-  })
-);
-
-// Gatilho de FECHAMENTO automático por preço-limite. O usuário define, por
-// posição, "feche se o preço passar de X ou cair abaixo de Y"; o job
-// check-close-triggers compara e, ao disparar, chama o CloseOnlyController.
-//
-// O bot NUNCA abre posição — a garantia é do contrato (não existe código de
-// mint nele), não desta tabela. Ver contracts/src/CloseOnlyController.sol.
-//
-// Identidade composta (chain, protocol, tokenId), como em lp_positions:
-// tokenId só é único dentro de um contrato, e V3/V4 podem colidir.
 export const closeTriggers = pgTable(
   "close_triggers",
   {

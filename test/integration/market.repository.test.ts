@@ -3,9 +3,6 @@ import {
   findLatestMarketVolumeDate,
   insertMarketVolume,
   listMarketVolumeSince,
-  listWatchedPairs,
-  unwatchPair,
-  watchPair,
 } from "../../src/persistence/repositories/market.repository.js";
 import { findOrCreateUserByTelegramChatId } from "../../src/persistence/repositories/users.repository.js";
 import { truncateAll } from "./db-helper.js";
@@ -54,35 +51,6 @@ describe("market.repository", () => {
         { date: "2026-08-05", volumeUsd: 2e9, source: "s" },
       ]);
       expect(await findLatestMarketVolumeDate()).toBe("2026-08-05");
-    });
-  });
-
-  describe("pares acompanhados", () => {
-    it("acompanha, lista e remove", async () => {
-      const user = await findOrCreateUserByTelegramChatId("chat-1");
-      expect(await watchPair(user.id, "USDC-WBTC")).toEqual({ isNew: true });
-      expect(await listWatchedPairs(user.id)).toEqual(["USDC-WBTC"]);
-      expect(await unwatchPair(user.id, "USDC-WBTC")).toBe(true);
-      expect(await listWatchedPairs(user.id)).toEqual([]);
-    });
-
-    it("acompanhar o mesmo par duas vezes não duplica", async () => {
-      const user = await findOrCreateUserByTelegramChatId("chat-1");
-      await watchPair(user.id, "ETH-USDC");
-      expect(await watchPair(user.id, "ETH-USDC")).toEqual({ isNew: false });
-      expect(await listWatchedPairs(user.id)).toHaveLength(1);
-    });
-
-    it("remover par que não está na lista devolve false", async () => {
-      const user = await findOrCreateUserByTelegramChatId("chat-1");
-      expect(await unwatchPair(user.id, "NAO-EXISTE")).toBe(false);
-    });
-
-    it("a lista de um usuário não vaza pro outro", async () => {
-      const a = await findOrCreateUserByTelegramChatId("chat-a");
-      const b = await findOrCreateUserByTelegramChatId("chat-b");
-      await watchPair(a.id, "ETH-USDC");
-      expect(await listWatchedPairs(b.id)).toEqual([]);
     });
   });
 });

@@ -6,7 +6,7 @@ import { watchPool } from "../../persistence/repositories/watched-pools.reposito
 export async function watchCommand(ctx: CommandContext<Context>) {
   const poolId = ctx.match?.toString().trim();
   if (!poolId) {
-    await ctx.reply("Uso: /watch <id>\nUse /find <chain> <symbol> para descobrir ids.");
+    await ctx.reply("Uso: /watch <id>\nPegue o id em /yield, ou em defillama.com/yields (ver /sites).");
     return;
   }
 
@@ -20,19 +20,17 @@ export async function watchCommand(ctx: CommandContext<Context>) {
   const { isNew } = await watchPool(user.id, pool.pool, pool.chain);
 
   if (!isNew) {
-    await ctx.reply(`Você já observa ${pool.project} — ${pool.symbol}. Use /alerts para ver as regras.`);
+    await ctx.reply(`Você já acompanha ${pool.project} — ${pool.symbol}.`);
     return;
   }
 
   await ctx.reply(
     [
-      `Observando ${pool.project} — ${pool.symbol} (${pool.chain}).`,
+      `Acompanhando ${pool.project} — ${pool.symbol} (${pool.chain}).`,
       "",
-      "Alertas padrão criados:",
-      "• Queda de APY ≥20% em 24h",
-      "• Queda de TVL ≥20% em 24h",
+      "A partir de agora eu gravo o APY e o TVL dessa pool a cada 15min, e o histórico fica guardado — nenhum site faz isso pra você.",
       "",
-      "Use /alerts para ver o estado, ou /unwatch para parar de observar.",
+      "Pra parar: /unwatch " + pool.pool,
     ].join("\n")
   );
 }

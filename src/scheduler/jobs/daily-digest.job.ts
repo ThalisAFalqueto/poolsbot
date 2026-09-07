@@ -9,9 +9,8 @@ import {
   findLatestMarketVolumeDate,
   insertMarketVolume,
   listMarketVolumeSince,
-  listWatchedPairs,
 } from "../../persistence/repositories/market.repository.js";
-import { formatMarketRegime } from "../../bot/commands/mercado.js";
+import { formatMarketRegime } from "../../domain/market/format-regime.js";
 import { preparePairComparison } from "../../bot/commands/comparar.js";
 import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
 import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
@@ -87,13 +86,15 @@ async function buildDigest(userId: number): Promise<DigestBlock[]> {
   blocks.push({ kind: "text", text: formatMarketRegime(regime, now) });
 
   // Pares = os que ele tem em posição ∪ os que ele configurou.
-  const [fromPositions, watched] = await Promise.all([listPositionPairSymbols(userId), listWatchedPairs(userId)]);
+  // Pares vêm SÓ das posições agora. A lista manual (/watchpair) saiu na
+  // limpeza de 07/09/2026 — vivia vazia, e o que você tem em posição é
+  // justamente o que interessa acompanhar.
+  const fromPositions = await listPositionPairSymbols(userId);
   const keys = new Set<string>();
   for (const symbol of fromPositions) {
     const k = normalizePairKey(symbol);
     if (k) keys.add(k);
   }
-  for (const k of watched) keys.add(k);
   if (keys.size === 0) return blocks;
 
   const monitorable = getActiveChains().map((c) => chains[c].defillamaChainName);

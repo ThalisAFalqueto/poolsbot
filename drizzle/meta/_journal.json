@@ -127,6 +127,13 @@
       "when": 1788811075757,
       "tag": "0017_fantastic_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788813115855,
+      "tag": "0018_thick_goliath",
+      "breakpoints": true
     }
   ]
 }

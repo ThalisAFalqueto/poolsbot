@@ -7,7 +7,6 @@ import { DEFAULT_REFERENCE, type ReferencePosition } from "../../domain/market/f
 import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
 import { measurePoolYields, MEASURE_WINDOW_DAYS, type PoolMeasurement } from "../../data/onchain/measure-pool-yield.js";
 import { listPositionPairSymbols } from "../../persistence/repositories/lp-positions.repository.js";
-import { listWatchedPairs } from "../../persistence/repositories/market.repository.js";
 import { findOrCreateUserByTelegramChatId } from "../../persistence/repositories/users.repository.js";
 
 // "Existe lugar melhor pra fazer o que eu já faço?" — o mesmo par ranqueado
@@ -175,21 +174,20 @@ export async function compararCommand(ctx: CommandContext<Context>) {
     pairKeys = [key];
   } else {
     const user = await findOrCreateUserByTelegramChatId(String(ctx.chat.id));
-    const [fromPositions, watched] = await Promise.all([listPositionPairSymbols(user.id), listWatchedPairs(user.id)]);
+    const fromPositions = await listPositionPairSymbols(user.id);
     const keys = new Set<string>();
     for (const symbol of fromPositions) {
       const k = normalizePairKey(symbol);
       if (k) keys.add(k);
     }
-    for (const k of watched) keys.add(k);
     pairKeys = [...keys];
 
     if (pairKeys.length === 0) {
       await ctx.reply(
         [
-          "Você ainda não tem posição nem par acompanhado, então não sei o que comparar.",
+          "Você ainda não tem posição aberta, então não sei o que comparar.",
           "",
-          "Peça um par direto (/comparar WBTC-USDC) ou adicione um à sua lista (/watchpair WBTC-USDC).",
+          "Peça um par direto: /comparar WBTC-USDC",
         ].join("\n")
       );
       return;

@@ -1,7 +1,20 @@
 import { and, asc, gte, inArray } from "drizzle-orm";
 import { db } from "../db.js";
 import { apyHistory } from "../schema/index.js";
-import type { PoolSnapshot } from "../../domain/alerts/types.js";
+
+/** Foto de uma pool num instante. Vivia em domain/alerts/types.ts, que saiu
+ *  com os alertas de métrica de pool (limpeza de 07/09/2026); o histórico em
+ *  si continua sendo gravado, então o tipo mudou de casa em vez de sumir. */
+export type PoolSnapshot = {
+  recordedAt: Date;
+  apy: number;
+  apyBase: number | null;
+  apyReward: number | null;
+  tvlUsd: number;
+  ilRisk: string | null;
+  il7d: number | null;
+  volumeUsd: number | null;
+};
 
 export type ApyHistoryRow = {
   poolId: string;

@@ -14,7 +14,7 @@ export async function unwatchCommand(ctx: CommandContext<Context>) {
 
   await ctx.reply(
     removed
-      ? "Pool removido da sua watchlist. Os alertas associados também foram removidos."
+      ? "Parei de acompanhar essa pool. O histórico já gravado continua guardado."
       : "Você não observa esse pool."
   );
 }

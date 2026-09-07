@@ -1,7 +1,6 @@
 import cron from "node-cron";
 import { recordJobRun } from "../persistence/repositories/job-status.repository.js";
 import { ingestPoolsJob } from "./jobs/ingest-pools.job.js";
-import { evaluateAlertsJob } from "./jobs/evaluate-alerts.job.js";
 import { checkPositionsJob } from "./jobs/check-positions.job.js";
 import { snapshotNavJob } from "./jobs/snapshot-nav.job.js";
 import { dailyDigestJob } from "./jobs/daily-digest.job.js";
@@ -24,7 +23,6 @@ async function runJob(jobName: string, fn: () => Promise<string>): Promise<void>
 
 async function runCycle(): Promise<void> {
   await runJob("ingest-pools", ingestPoolsJob);
-  await runJob("evaluate-alerts", evaluateAlertsJob);
   await runJob("check-positions", checkPositionsJob);
   // Único job que ESCREVE na blockchain. Depois do check-positions de
   // propósito: se uma posição sumiu, o estado já foi atualizado antes de
