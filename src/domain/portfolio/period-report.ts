@@ -9,7 +9,11 @@
 
 export type CashFlow = { direction: "deposit" | "withdrawal"; valueUsdc: number; occurredAt: Date };
 
-export type MonthlyReport = {
+/** Resultado de um período qualquer — dia, semana ou mês. Já era genérico
+ *  (Modified Dietz sobre periodStart/periodEnd); o nome "monthly" só descrevia
+ *  o único chamador que existia. Renomeado em 07/09/2026 junto com /dia e
+ *  /semana. */
+export type PeriodReport = {
   pnlUsdc: number;
   /** Retorno sobre o capital médio empregado no período (0.03 = +3%). */
   returnPct: number;
@@ -30,13 +34,13 @@ function timeWeight(occurredAt: Date, start: Date, end: Date): number {
   return Math.min(1, Math.max(0, remaining / total));
 }
 
-export function calculateMonthlyReport(input: {
+export function calculatePeriodReport(input: {
   navStartUsdc: number;
   navEndUsdc: number;
   flows: CashFlow[];
   periodStart: Date;
   periodEnd: Date;
-}): MonthlyReport {
+}): PeriodReport {
   const { navStartUsdc, navEndUsdc, flows, periodStart, periodEnd } = input;
 
   let depositsUsdc = 0;

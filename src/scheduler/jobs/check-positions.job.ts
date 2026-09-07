@@ -26,7 +26,7 @@ import { executeSignal } from "../../execution/noop-executor.js";
 import { dispatchSignal } from "../../notifications/dispatch-signal.js";
 import {
   archiveStalePositions,
-  deleteStalePositions,
+  deleteConfirmedClosedPositions,
   getIlAlertState,
   getPositionState,
   hasCompleteSnapshot,
@@ -42,6 +42,7 @@ import {
 } from "../../persistence/repositories/lp-positions.repository.js";
 import { insertPriceHistory } from "../../persistence/repositories/pool-price-history.repository.js";
 import { getNearEdgeNotifiedAt, setNearEdgeNotifiedAt } from "../../persistence/repositories/lp-positions.repository.js";
+import { confirmPositionClosed } from "../../data/onchain/confirm-closed.js";
 
 /** Cadência do aviso de borda. 6h é o mesmo ritmo do lembrete de fora-de-faixa
  *  — chegar perto da borda não é notícia nova a cada 15min. */
@@ -204,7 +205,23 @@ export async function checkPositionsJob(): Promise<string> {
         // protocolos numeram tokenId de forma independente e podem colidir
         // (ver ActivePositionKey no repositório).
         const activeKeys = onchainPositions.map((p) => ({ tokenId: p.tokenId.toString(), protocol: p.protocol }));
-        const staleCandidates = await listStalePositionCandidates(user.userId, chain, activeKeys);
+        const suspeitas = await listStalePositionCandidates(user.userId, chain, activeKeys);
+
+        // CONFIRMA no contrato antes de arquivar. Sumir da lista é indício, não
+        // prova — ver data/onchain/confirm-closed.ts pro incidente de
+        // 03/09/2026 em que uma posição aberta foi arquivada e recriada.
+        // Na dúvida (leitura falhou), NÃO arquiva: manter custa uma linha,
+        // apagar custa gas de mint, data de abertura e baseline de IL.
+        const staleCandidates: typeof suspeitas = [];
+        const naoConfirmadas: string[] = [];
+        for (const c of suspeitas) {
+          const r = await confirmPositionClosed(chain, c.protocol, c.tokenId);
+          if (r.closed === true) staleCandidates.push(c);
+          else naoConfirmadas.push(`#${c.tokenId} (${r.closed === false ? r.reason : `não confirmado: ${r.reason}`})`);
+        }
+        if (naoConfirmadas.length > 0) {
+          console.warn(`[check-positions] sumiram da lista mas NÃO foram arquivadas: ${naoConfirmadas.join(", ")}`);
+        }
 
         // Custo REAL de gas do close (não estimativa) — só busca pra
         // candidatos que de fato vão ser arquivados (sem snapshot completo,
@@ -230,7 +247,12 @@ export async function checkPositionsJob(): Promise<string> {
           }
         }
         await archiveStalePositions(staleCandidates, closeGasByPositionId, chains[chain].nativeGasSymbol);
-        await deleteStalePositions(user.userId, chain, activeKeys);
+        // Apaga só o que foi CONFIRMADO fechado, não tudo que sumiu da lista.
+        await deleteConfirmedClosedPositions(
+          user.userId,
+          chain,
+          staleCandidates.map((c) => ({ tokenId: c.tokenId, protocol: c.protocol }))
+        );
 
         const now = new Date();
         const upsertedByTokenId = new Map(upserted.map((u) => [u.tokenId, u]));

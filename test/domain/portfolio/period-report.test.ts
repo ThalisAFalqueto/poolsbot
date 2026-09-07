@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { calculateMonthlyReport, type CashFlow } from "../../../src/domain/portfolio/monthly-report.js";
+import { calculatePeriodReport, type CashFlow } from "../../../src/domain/portfolio/period-report.js";
 
 const START = new Date("2026-09-01T00:00:00Z");
 const END = new Date("2026-10-01T00:00:00Z");
 
 function report(navStart: number, navEnd: number, flows: CashFlow[] = []) {
-  return calculateMonthlyReport({ navStartUsdc: navStart, navEndUsdc: navEnd, flows, periodStart: START, periodEnd: END });
+  return calculatePeriodReport({ navStartUsdc: navStart, navEndUsdc: navEnd, flows, periodStart: START, periodEnd: END });
 }
 
-describe("calculateMonthlyReport", () => {
+describe("calculatePeriodReport", () => {
   it("sem fluxos, o P&L é a diferença pura de patrimônio", () => {
     const r = report(100, 103);
     expect(r.pnlUsdc).toBeCloseTo(3, 10);

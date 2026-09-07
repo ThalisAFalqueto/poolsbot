@@ -5,7 +5,7 @@ import { findOrCreateUserByTelegramChatId } from "../../src/persistence/reposito
 import { addWallet } from "../../src/persistence/repositories/user-wallets.repository.js";
 import {
   archiveStalePositions,
-  deleteStalePositions,
+  deleteConfirmedClosedPositions,
   getIlAlertState,
   getIlBaseline,
   getPositionState,
@@ -117,10 +117,18 @@ describe("lp-positions.repository", () => {
     const activeKeys: ActivePositionKey[] = active.map((a) => (typeof a === "string" ? { tokenId: a, protocol: "v3" } : a));
     const candidates = await listStalePositionCandidates(userId, chain, activeKeys);
     await archiveStalePositions(candidates, closeGasByPositionId, "ETH");
-    await deleteStalePositions(userId, chain, activeKeys);
+    // O job só apaga o que CONFIRMOU fechado on-chain (ver
+    // data/onchain/confirm-closed.ts). Aqui o helper simula a confirmação
+    // tendo dado positiva pra todos os candidatos — os testes deste bloco são
+    // sobre a reconciliação em si, não sobre a confirmação.
+    await deleteConfirmedClosedPositions(
+      userId,
+      chain,
+      candidates.map((c) => ({ tokenId: c.tokenId, protocol: c.protocol }))
+    );
   }
 
-  describe("listStalePositionCandidates / archiveStalePositions / deleteStalePositions", () => {
+  describe("listStalePositionCandidates / archiveStalePositions / deleteConfirmedClosedPositions", () => {
     it("remove só as posições que não estão mais na lista ativa", async () => {
       const user = await findOrCreateUserByTelegramChatId("chat-1");
       await upsertPositions([

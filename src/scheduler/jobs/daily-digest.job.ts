@@ -11,6 +11,14 @@ import {
   listMarketVolumeSince,
 } from "../../persistence/repositories/market.repository.js";
 import { formatMarketRegime } from "../../domain/market/format-regime.js";
+import { calculatePeriodReport } from "../../domain/portfolio/period-report.js";
+import { formatWeeklySummary } from "../../domain/portfolio/format-report.js";
+import { isoDate, weekBounds } from "../../domain/portfolio/periods.js";
+import {
+  findLatestNavSnapshotUpTo,
+  listCashFlowsBetween,
+  listNavSnapshotsBetween,
+} from "../../persistence/repositories/wallet-nav.repository.js";
 import { preparePairComparison } from "../../bot/commands/comparar.js";
 import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
 import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
@@ -39,6 +47,41 @@ const MAX_PAIRS_IN_DIGEST = 3;
 
 const sentToday = new Set<string>();
 
+/** Dia da semana (UTC) em que o fechamento semanal entra no resumo. 1 =
+ *  segunda — a semana de segunda a domingo já fechou, então o número é
+ *  definitivo em vez de parcial. */
+const DIA_DO_FECHAMENTO_SEMANAL = 1;
+
+// Fechamento da SEMANA ANTERIOR, anexado ao resumo de segunda. Decisão do
+// usuário (07/09/2026): o diário fica sob demanda (/dia), porque num único dia
+// o número é quase todo ruído de preço; o semanal chega sozinho.
+//
+// Devolve null em silêncio quando falta foto de abertura — o resumo diário não
+// é lugar de explicar ausência de dado, e o /semana explica direito se ele
+// perguntar.
+async function blocoSemanal(userId: number, now: Date): Promise<DigestBlock | null> {
+  const periodo = weekBounds(new Date(now.getTime() - 7 * 86400000));
+  const diaAnterior = isoDate(new Date(periodo.start.getTime() - 86400000));
+  const ultimoDia = isoDate(new Date(periodo.end.getTime() - 86400000));
+
+  const [abertura, fotos, fluxos] = await Promise.all([
+    findLatestNavSnapshotUpTo(userId, diaAnterior),
+    listNavSnapshotsBetween(userId, isoDate(periodo.start), ultimoDia),
+    listCashFlowsBetween(userId, periodo.start, periodo.end),
+  ]);
+  const fechamento = fotos.at(-1);
+  if (!abertura || !fechamento) return null;
+
+  const report = calculatePeriodReport({
+    navStartUsdc: abertura.navUsdc,
+    navEndUsdc: fechamento.navUsdc,
+    flows: fluxos.map((f) => ({ direction: f.direction, valueUsdc: f.valueUsdc, occurredAt: f.occurredAt })),
+    periodStart: periodo.start,
+    periodEnd: periodo.end,
+  });
+  return { kind: "text", text: formatWeeklySummary(periodo, report, fechamento.navUsdc) };
+}
+
 function utcDate(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
@@ -64,9 +107,9 @@ type DigestBlock = { kind: "photo"; png: Buffer; caption?: string } | { kind: "t
 /** Janela desenhada no gráfico de mercado — ver CHART_DAYS em mercado.ts. */
 const CHART_DAYS = 120;
 
-async function buildDigest(userId: number): Promise<DigestBlock[]> {
+async function buildDigest(userId: number, now: Date): Promise<DigestBlock[]> {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
-  const [series, now] = await Promise.all([listMarketVolumeSince(since), fetchMarketVolumeNow()]);
+  const [series, volumeAgora] = await Promise.all([listMarketVolumeSince(since), fetchMarketVolumeNow()]);
   const regime = analyzeMarketRegime(series);
   const blocks: DigestBlock[] = [];
 
@@ -83,7 +126,13 @@ async function buildDigest(userId: number): Promise<DigestBlock[]> {
       console.error("[daily-digest] falha ao gerar gráfico de mercado:", err);
     }
   }
-  blocks.push({ kind: "text", text: formatMarketRegime(regime, now) });
+  blocks.push({ kind: "text", text: formatMarketRegime(regime, volumeAgora) });
+
+  // Segunda-feira: o fechamento da semana que acabou entra no mesmo resumo.
+  if (now.getUTCDay() === DIA_DO_FECHAMENTO_SEMANAL) {
+    const semanal = await blocoSemanal(userId, now);
+    if (semanal) blocks.push(semanal);
+  }
 
   // Pares = os que ele tem em posição ∪ os que ele configurou.
   // Pares vêm SÓ das posições agora. A lista manual (/watchpair) saiu na
@@ -182,7 +231,7 @@ export async function dailyDigestJob(): Promise<string> {
     if (!chatId) continue;
 
     try {
-      const blocks = await buildDigest(userId);
+      const blocks = await buildDigest(userId, now);
       for (const block of blocks) await sendBlock(chatId, block);
       // Marca DEPOIS do envio: se falhar no meio, a próxima rodada tenta de
       // novo em vez de pular o dia inteiro.

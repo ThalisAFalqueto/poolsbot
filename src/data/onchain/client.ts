@@ -25,6 +25,28 @@ export async function getGasPrice(chainKey: ChainKey): Promise<bigint> {
 
 // client.multicall usa o contrato multicall3, já pré-configurado em
 // viem/chains pras chains suportadas — nenhuma config extra necessária.
+/**
+ * Levanta erro quando qualquer chamada do multicall falhou.
+ *
+ * POR QUE ISSO EXISTE — bug real, 03/09/2026. A lista de posições era montada
+ * filtrando as chamadas que falharam, então uma falha PARCIAL de RPC devolvia
+ * uma lista mais curta, sem erro nenhum. O check-positions.job trata essa
+ * lista como verdade: o que não está nela foi fechado. Resultado: a posição
+ * WBTC/USDC do usuário foi arquivada em closed_lp_positions e recriada 15min
+ * depois — perdendo o gas de mint, a data de abertura e o baseline de IL, e
+ * criando uma posição "fechada" que nunca fechou.
+ *
+ * Lançar erro faz `fetchPositionsAcrossChains` omitir a chain inteira, que é o
+ * comportamento seguro que já existia pra falha TOTAL. Um ciclo perdido não
+ * custa nada; uma posição arquivada por engano custa dado que não volta.
+ */
+export function assertNoPartialFailure(results: readonly { status: string }[], contexto: string): void {
+  const falhas = results.filter((r) => r.status !== "success").length;
+  if (falhas > 0) {
+    throw new Error(`${falhas}/${results.length} chamadas falharam em ${contexto} — recusando lista incompleta`);
+  }
+}
+
 export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address): Promise<OnchainPosition[]> {
   const publicClient = getPublicClient(chainKey);
   const npm = {
@@ -42,6 +64,7 @@ export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address
     ),
     allowFailure: true,
   });
+  assertNoPartialFailure(indexResults, `tokenOfOwnerByIndex de ${owner} em ${chainKey}`);
   const tokenIds = indexResults
     .filter((r): r is Extract<typeof r, { status: "success" }> => r.status === "success")
     .map((r) => r.result);
@@ -51,6 +74,7 @@ export async function fetchPositionsForWallet(chainKey: ChainKey, owner: Address
     contracts: tokenIds.map((tokenId) => ({ ...npm, functionName: "positions", args: [tokenId] }) as const),
     allowFailure: true,
   });
+  assertNoPartialFailure(positionResults, `positions() de ${owner} em ${chainKey}`);
 
   // liquidity === 0n => posição fechada/vazia (ainda existe como NFT, mas
   // não representa capital em risco de sair de range). liquidity é o

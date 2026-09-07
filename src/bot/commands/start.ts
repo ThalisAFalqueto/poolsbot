@@ -23,7 +23,7 @@ export async function startCommand(ctx: CommandContext<Context>) {
       "/labelposition <tokenId> <nome> — dá um apelido curto pra uma posição (ex: /labelposition 5658859 p1)",
       "/graph [apelido ou tokenId] — imagem mostrando a faixa da posição vs. preço de entrada e atual (sem argumento, usa sua única posição)",
       "/closed — histórico de posições de LP já fechadas, com o P&L final de cada uma",
-      "/mes [AAAA-MM] — resultado do mês pelo patrimônio total da carteira (já descontando gas e slippage); sem argumento, mês atual",
+      "/dia, /semana, /mes — resultado do período pelo patrimônio total da carteira (já descontando gas e slippage); aceitam data como argumento",
       "/comparar <par> — o mesmo par ranqueado entre chains pelo que cada pool paga DE VERDADE (medido on-chain, não o apyBase); sem argumento, usa os pares que você tem",
       "/explicacoes [assunto] — como cada conta do bot é feita: fórmula, exemplo com números reais e o que o número não diz",
       "/fechar <tokenId> abaixo <preço> acima <preço> — fecha a posição sozinho quando o preço bater no limite (o bot só sabe FECHAR, nunca abrir; os fundos vão direto pra sua wallet)",

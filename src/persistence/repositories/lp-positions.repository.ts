@@ -274,14 +274,28 @@ export async function archiveStalePositions(
   );
 }
 
-// Reconciliação: remove qualquer posição do usuário/chain cujo tokenId não
-// esteja mais no conjunto ativo on-chain (fechada ou transferida pra outra
-// wallet) — cascade limpa lp_position_state junto. Deleta TODAS as stale
-// (arquivadas ou não em archiveStalePositions) — mesmo comportamento de
-// sempre, só separado em função própria pra caber a etapa de gas de close
-// no meio do fluxo (ver listStalePositionCandidates acima).
-export async function deleteStalePositions(userId: number, chain: string, active: ActivePositionKey[]): Promise<void> {
-  await db.delete(lpPositions).where(stalePositionsWhere(userId, chain, active));
+// Apaga as posições CONFIRMADAS fechadas — cascade limpa lp_position_state
+// junto.
+//
+// Recebe a lista explícita em vez de derivar de "não está no conjunto ativo",
+// que era o comportamento antigo. A diferença é o incidente de 03/09/2026: uma
+// falha parcial de RPC encolhia a lista ativa, e tudo que sumia dela era
+// apagado. Agora quem chama confirma no contrato primeiro (ver
+// data/onchain/confirm-closed.ts), e o que não foi confirmado simplesmente
+// fica.
+export async function deleteConfirmedClosedPositions(
+  userId: number,
+  chain: string,
+  closed: ActivePositionKey[]
+): Promise<void> {
+  if (closed.length === 0) return;
+  await db.delete(lpPositions).where(
+    and(
+      eq(lpPositions.userId, userId),
+      eq(lpPositions.chain, chain),
+      or(...closed.map((k) => and(eq(lpPositions.tokenId, k.tokenId), eq(lpPositions.protocol, k.protocol))))
+    )
+  );
 }
 
 // Escreve o apelido — ÚNICO lugar que deveria tocar essa coluna (ver

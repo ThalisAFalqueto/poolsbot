@@ -4,7 +4,7 @@ import { calculateFeesOwedFromGrowth, decodePositionInfo } from "../../domain/lp
 import { tickSpacingForFee } from "../../domain/lp-rebalance/price-math.js";
 import type { OnchainPosition } from "../../domain/lp-rebalance/types.js";
 import { erc20Abi } from "./abis.js";
-import { getPublicClient, type PoolInfo, type UncollectedFees } from "./client.js";
+import { assertNoPartialFailure, getPublicClient, type PoolInfo, type UncollectedFees } from "./client.js";
 import { uniswapV4PositionManagerAbi, uniswapV4StateViewAbi } from "./v4-abis.js";
 
 type PoolKey = { currency0: Address; currency1: Address; fee: number; tickSpacing: number; hooks: Address };
@@ -98,6 +98,12 @@ export async function fetchV4PositionsForWallet(chainKey: ChainKey, owner: Addre
       allowFailure: true,
     }),
   ]);
+
+  // Falha PARCIAL de RPC não pode encolher a lista em silêncio: quem consome
+  // trata o que não está aqui como posição fechada, e arquiva. Ver
+  // assertNoPartialFailure em client.ts pro incidente de 03/09/2026.
+  assertNoPartialFailure(poolAndInfoResults, `getPoolAndPositionInfo de ${owner} em ${chainKey}`);
+  assertNoPartialFailure(liquidityResults, `getPositionLiquidity de ${owner} em ${chainKey}`);
 
   // liquidity === 0n => posição fechada/vazia (mesmo critério do V3) — não
   // representa capital em risco, fica de fora.

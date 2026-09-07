@@ -99,7 +99,7 @@ docker exec poolsbot-postgres-1 pg_restore -U poolsbot -d poolsbot \
 | `/graph [apelido]` | gráfico da faixa + histórico de preço |
 | `/labelposition <tokenId> <nome>` | apelido pra usar no `/graph` |
 | `/closed` | posições já fechadas, com P&L final e gas |
-| `/mes [AAAA-MM]` | resultado do mês pelo patrimônio total da carteira |
+| `/dia`, `/semana`, `/mes` | resultado do período pelo patrimônio total (Modified Dietz); o semanal também chega sozinho às segundas |
 | `/range <poolId>` | sugere faixa **antes** de abrir a posição |
 | `/yield <chain>` | pools de liquidez concentrada ranqueadas pelo que pagam **de verdade** + quanto a faixa dura |
 | `/addwallet`, `/removewallet`, `/wallets` | wallets monitoradas (só endereço público) |
@@ -246,6 +246,21 @@ Histórico: a DefiLlama devolve a série diária **desde 2014** numa chamada (~1
 
 
 > Tanto o `/mercado` quanto o `/comparar` respondem com **imagem** (matplotlib, mesma infra do `/graph`), não tabela de texto. Motivo concreto: o Telegram usa fonte proporcional fora de `<pre>`, então alinhamento por espaços sai torto — e o resumo diário chegou a mandar as tags HTML cruas na tela por não passar `parse_mode`. Imagem não depende de fonte, de largura de tela nem de modo de parse. Se o `.venv` não existir na máquina, os dois caem pro texto em vez de falhar.
+
+## O bot deu uma posição aberta como fechada (03/09/2026)
+
+Bug com perda de dado, corrigido em 07/09.
+
+`fetchPositionsForWallet` lia as posições com `multicall({ allowFailure: true })` e **filtrava** as chamadas que falhavam. Numa falha parcial de RPC a lista encolhia sem erro nenhum — e `check-positions` trata essa lista como verdade: o que não está nela foi fechado. A `WBTC/USDC #5674258` foi arquivada em `closed_lp_positions` às 16:00 e recriada às 16:15, perdendo gas de mint, data de abertura e baseline de IL, e criando um P&L falso de −$0,90 no `/closed`.
+
+Duas camadas de correção, porque uma só fecharia a causa e não a classe:
+
+1. **`assertNoPartialFailure`** (`data/onchain/client.ts`) — falha parcial vira erro, e `fetchPositionsAcrossChains` omite a chain inteira, que é o caminho seguro que já existia pra falha total.
+2. **`confirmPositionClosed`** (`data/onchain/confirm-closed.ts`) — antes de arquivar, lê a liquidez direto do contrato. Só arquiva com liquidez zero (ou NFT queimado). **Leitura que falha devolve indeterminado e NÃO arquiva**: manter um registro a mais custa uma linha, apagar custa dado que não volta.
+
+`deleteStalePositions` virou `deleteConfirmedClosedPositions` e recebe a lista explícita do que foi confirmado, em vez de derivar de "não está no conjunto ativo".
+
+O dado foi recuperado com `src/scripts/repair-false-close.ts` — a data e o gas certos tinham sobrevivido na própria linha fantasma.
 
 ## Fechamento automático
 
