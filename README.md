@@ -46,7 +46,7 @@ ssh -i ~/.ssh/oracle_poolsbot opc@<ip-da-vm> \
   "cd ~/poolsbot && npm ci && npm run build && pm2 restart poolsbot"
 ```
 
-Depois: `pm2 logs poolsbot` na VM e conferir se um ciclo completo (`ingest-pools`, `evaluate-alerts`, `check-positions`) roda limpo.
+Depois: `pm2 logs poolsbot` na VM e conferir se um ciclo completo (`ingest-pools`, `check-positions`, `snapshot-nav`) roda limpo.
 
 ### Backups
 

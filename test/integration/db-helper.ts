@@ -15,6 +15,7 @@ const TABLES = [
   // seguinte e quebravam a asserção de "banco vazio".
   "job_status",
   "market_volume_history",
+  "pool_price_history",
 ];
 
 // TRUNCATE com múltiplas tabelas numa única instrução não exige ordem de

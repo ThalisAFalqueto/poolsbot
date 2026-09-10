@@ -75,21 +75,28 @@ export async function getPoolById(poolId: string): Promise<DefiLlamaPool | undef
   return pools.find((p) => p.pool === poolId);
 }
 
-const FEE_TIER_BY_LABEL: Record<string, number> = {
-  "0.01%": 100,
-  "0.05%": 500,
-  "0.3%": 3000,
-  "1%": 10000,
-};
+/** Os 4 fee tiers padrão do Uniswap V3, em pips (o valor que o contrato usa). */
+const FEE_TIERS = new Set([100, 500, 3000, 10000]);
 
 // poolMeta da DefiLlama pra pools Uniswap V3 vem como o rótulo do fee tier
 // (ex: "0.05%"), não o valor numérico bruto que o contrato usa (500). Só
 // cobre os 4 fee tiers padrão do Uniswap V3 — qualquer outro rótulo (ou
 // poolMeta ausente/de outro protocolo) retorna null, deixando quem chama
 // decidir como lidar (não finge um fee tier que não foi confirmado).
+//
+// A CONVERSÃO É NUMÉRICA, não uma tabela de rótulos. Era uma tabela, e a
+// DefiLlama escreve o MESMO tier das duas formas: no mesmo instante (10/09/2026)
+// havia "0.3%" numa pool da Base e "0.30%" na WBTC-USDC 0,30% da Arbitrum. Só
+// "0.3%" estava na tabela, então a segunda virava null e a pool sumia em
+// silêncio de /yield, /comparar e do histórico de preço — sem erro, apenas uma
+// pool a menos na lista.
 export function parseFeeTierLabel(poolMeta: string | null): number | null {
   if (!poolMeta) return null;
-  return FEE_TIER_BY_LABEL[poolMeta.trim()] ?? null;
+  const m = /^(\d+(?:\.\d+)?)\s*%$/.exec(poolMeta.trim());
+  if (!m) return null;
+  // Arredonda porque 0.05 * 10000 dá 500.0000000000001 em ponto flutuante.
+  const pips = Math.round(Number(m[1]) * 10_000);
+  return FEE_TIERS.has(pips) ? pips : null;
 }
 
 // A API da DefiLlama não expõe o endereço do pool on-chain diretamente —

@@ -40,7 +40,7 @@ import {
   upsertPositions,
   type CloseGasResult,
 } from "../../persistence/repositories/lp-positions.repository.js";
-import { insertPriceHistory } from "../../persistence/repositories/pool-price-history.repository.js";
+import { insertPriceHistoryIfDue } from "../../persistence/repositories/pool-price-history.repository.js";
 import { getNearEdgeNotifiedAt, setNearEdgeNotifiedAt } from "../../persistence/repositories/lp-positions.repository.js";
 import { confirmPositionClosed } from "../../data/onchain/confirm-closed.js";
 
@@ -281,7 +281,10 @@ export async function checkPositionsJob(): Promise<string> {
           if (!recordedPricePools.has(pricePoolKey)) {
             recordedPricePools.add(pricePoolKey);
             try {
-              await insertPriceHistory([
+              // Guardado: o ingest-pools grava a mesma pool quando ela está
+              // em watched_pools, e dois pontos a segundos de distância
+              // estragam o σ (ver MIN_PRICE_GAP_MS).
+              await insertPriceHistoryIfDue([
                 {
                   chain: position.chain,
                   poolAddress: position.poolAddress,

@@ -34,15 +34,28 @@ describe("parseFeeTierLabel", () => {
     expect(parseFeeTierLabel("0.01%")).toBe(100);
     expect(parseFeeTierLabel("0.05%")).toBe(500);
     expect(parseFeeTierLabel("0.3%")).toBe(3000);
+    // A DefiLlama escreve o MESMO tier das duas formas, na mesma resposta:
+    // "0.3%" numa pool da Base e "0.30%" na WBTC-USDC da Arbitrum (10/09/2026).
+    // Quando isso era uma tabela de rótulos, a segunda virava null e a pool
+    // desaparecia de /yield e /comparar sem nenhum erro.
+    expect(parseFeeTierLabel("0.30%")).toBe(3000);
+    expect(parseFeeTierLabel("0.010%")).toBe(100);
+    expect(parseFeeTierLabel("1.00%")).toBe(10000);
     expect(parseFeeTierLabel("1%")).toBe(10000);
   });
 
   it("retorna null pra rótulo desconhecido", () => {
     expect(parseFeeTierLabel("0.5%")).toBeNull();
+    // Existe de verdade (pool de CBBTC na Base) e NÃO é um tier do V3 — não
+    // pode virar 3000 só por parecer com "0.3%".
+    expect(parseFeeTierLabel("0.35%")).toBeNull();
   });
 
   it("retorna null pra poolMeta ausente", () => {
     expect(parseFeeTierLabel(null)).toBeNull();
+    expect(parseFeeTierLabel("")).toBeNull();
+    expect(parseFeeTierLabel("dynamic")).toBeNull();
+    expect(parseFeeTierLabel("0.05")).toBeNull();
   });
 
   it("tolera espaço em volta do rótulo", () => {

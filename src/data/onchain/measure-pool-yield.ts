@@ -116,9 +116,16 @@ async function fetchActiveLiquidity(chainKey: ChainKey, isV4: boolean, poolRef: 
   }
 }
 
-type Resolved = { poolId: string; chainKey: ChainKey; isV4: boolean; tokenA: Address; tokenB: Address; fee: number };
+export type ResolvedPoolRef = { poolId: string; chainKey: ChainKey; isV4: boolean; tokenA: Address; tokenB: Address; fee: number };
+type Resolved = ResolvedPoolRef;
 
-function resolve(pool: MeasurablePool, active: ChainKey[]): Resolved | null {
+/** Traduz um pool do catálogo da DefiLlama pro que o RPC precisa: chain, par e
+ *  fee tier. Devolve null pro que o bot não sabe ler — chain sem RPC, ou
+ *  protocolo que não seja Uniswap V3/V4. Exportado porque o ingest-pools usa a
+ *  mesma tradução pra gravar preço (ver data/onchain/pool-price.ts); duplicar
+ *  isso é como as duas metades do bot passam a discordar sobre o que é a
+ *  mesma pool. */
+export function resolveMeasurablePool(pool: MeasurablePool, active: ChainKey[]): Resolved | null {
   const chainKey = chainKeyFromDefillamaName(pool.chain);
   if (!chainKey || !active.includes(chainKey)) return null;
   const isV4 = pool.project === "uniswap-v4";
@@ -198,7 +205,7 @@ export async function measurePoolYields(
   ref: ReferencePosition = DEFAULT_REFERENCE
 ): Promise<Map<string, PoolMeasurement>> {
   const active = getActiveChains();
-  const resolved = pools.map((p) => resolve(p, active)).filter((r): r is Resolved => r !== null);
+  const resolved = pools.map((p) => resolveMeasurablePool(p, active)).filter((r): r is Resolved => r !== null);
   if (resolved.length === 0) return new Map();
 
   // Um par de blocos por CHAIN (não por pool): a busca de bloco é o pedaço
