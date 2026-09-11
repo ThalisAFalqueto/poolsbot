@@ -18,6 +18,10 @@
 // preço vigente a cada N minutos. Pra estimar volatilidade e rodar backtest de
 // largura, que é o uso, amostra é suficiente e é o que a ingestão normal do
 // bot já faz (a cada 15min). Pra contar swaps individuais, não serve.
+//
+// SÓ PREENCHE BURACO (desde 11/09/2026): amostra a menos de meio passo de um
+// ponto já gravado é descartada — ver domain/market/price-gaps.ts pro porquê.
+// Rodar de novo sobre a mesma janela é seguro.
 
 import { parseAbi, type Address } from "viem";
 import { chainKeyFromDefillamaName } from "../config/chains.js";
@@ -26,7 +30,8 @@ import { getPoolInfo, getPublicClient } from "../data/onchain/client.js";
 import { getV4PoolInfo } from "../data/onchain/client-v4.js";
 import { findBlockNearTimestamp } from "../data/onchain/fee-growth.js";
 import { sqrtPriceX96ToPrice } from "../domain/lp-rebalance/price-math.js";
-import { insertPriceHistory, type PriceHistoryRow } from "../persistence/repositories/pool-price-history.repository.js";
+import { keepOnlyGapSamples } from "../domain/market/price-gaps.js";
+import { getPriceHistorySince, insertPriceHistory, type PriceHistoryRow } from "../persistence/repositories/pool-price-history.repository.js";
 
 const v3Abi = parseAbi([
   "function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 a, uint16 b, uint16 c, uint8 d, bool e)",
@@ -151,10 +156,18 @@ async function main() {
       console.error("  nada pra gravar\n");
       continue;
     }
-    await insertPriceHistory(linhas);
-    const precos = linhas.map((l) => l.price);
+    const inicio = Math.min(...linhas.map((l) => l.recordedAt.getTime()));
+    const existentes = await getPriceHistorySince(chainKey, info.poolAddress, new Date(inicio - passoMin * 60_000));
+    const novas = keepOnlyGapSamples(linhas, existentes.map((p) => p.recordedAt), (passoMin * 60_000) / 2);
+    console.log(`  ${linhas.length - novas.length} amostras descartadas: já havia ponto a menos de ${passoMin / 2}min`);
+    if (novas.length === 0) {
+      console.log("  nenhum buraco nessa janela, nada a gravar\n");
+      continue;
+    }
+    await insertPriceHistory(novas);
+    const precos = novas.map((l) => l.price);
     console.log(
-      `  gravados ${linhas.length} pontos · preço de ${Math.min(...precos).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} a ${Math.max(...precos).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}\n`
+      `  gravados ${novas.length} pontos · preço de ${Math.min(...precos).toLocaleString("pt-BR", { maximumFractionDigits: 2 })} a ${Math.max(...precos).toLocaleString("pt-BR", { maximumFractionDigits: 2 })}\n`
     );
   }
   process.exit(0);

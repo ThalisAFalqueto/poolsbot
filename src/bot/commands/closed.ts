@@ -158,5 +158,5 @@ export async function closedCommand(ctx: CommandContext<Context>) {
   );
 
   const total = formatFeesTotal(rows);
-  await ctx.reply(["Posições de LP fechadas:", "", ...blocks, ...(total ? [total] : [])].join("\n\n"));
+  await ctx.reply(["Posições de LP fechadas:", ...blocks, ...(total ? [total] : [])].join("\n\n"));
 }
