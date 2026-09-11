@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, ne, or } from "drizzle-orm";
 import { db } from "../db.js";
 import { poolPriceHistory } from "../schema/index.js";
 
@@ -57,17 +57,49 @@ export async function insertPriceHistoryIfDue(rows: PriceHistoryRow[], minGapMs 
   return aGravar.length;
 }
 
+/** Fonte do backfill antigo, via Dune (ver scripts/backfill-price-history.ts). */
+const DUNE_SOURCE = "dune_backfill";
+
+/**
+ * Histórico de preço de um pool, com o Dune usado SÓ antes da primeira leitura
+ * on-chain daquele pool.
+ *
+ * POR QUE (medido em 11/09/2026, WBTC/USDC). As duas fontes medem coisas
+ * diferentes: o Dune agrega os swaps da hora, o on-chain lê o slot0 num bloco.
+ * Nos mesmos 10 minutos elas diferem 12 bps na mediana (44 no p90), sem viés
+ * de sinal — ruído, não erro de uma delas. Sozinha, cada uma dá o mesmo σ
+ * (1,25% contra 1,26%/dia antes do salto de agosto). Intercaladas a cada ~30
+ * minutos, o ruído vira um zigue-zague que o √Δt amplifica, e o σ misturado
+ * saía 2,12% — 70% acima de qualquer uma das duas.
+ *
+ * O on-chain é o preço canônico do bot (tudo mais lê slot0), então ele ganha
+ * onde existe. Nada é apagado: o Dune continua no banco e segue valendo onde é
+ * a única fonte.
+ */
 export async function getPriceHistorySince(chain: string, poolAddress: string, since: Date): Promise<PricePoint[]> {
-  const rows = await db
+  const [primeiroOnchain] = await db
+    .select({ recordedAt: poolPriceHistory.recordedAt })
+    .from(poolPriceHistory)
+    .where(
+      and(eq(poolPriceHistory.chain, chain), eq(poolPriceHistory.poolAddress, poolAddress), ne(poolPriceHistory.source, DUNE_SOURCE))
+    )
+    .orderBy(asc(poolPriceHistory.recordedAt))
+    .limit(1);
+
+  const soOnchainOndeExiste = primeiroOnchain
+    ? or(ne(poolPriceHistory.source, DUNE_SOURCE), lt(poolPriceHistory.recordedAt, primeiroOnchain.recordedAt))
+    : undefined;
+
+  return db
     .select({ recordedAt: poolPriceHistory.recordedAt, price: poolPriceHistory.price })
     .from(poolPriceHistory)
     .where(
       and(
         eq(poolPriceHistory.chain, chain),
         eq(poolPriceHistory.poolAddress, poolAddress),
-        gte(poolPriceHistory.recordedAt, since)
+        gte(poolPriceHistory.recordedAt, since),
+        soOnchainOndeExiste
       )
     )
     .orderBy(asc(poolPriceHistory.recordedAt));
-  return rows;
 }

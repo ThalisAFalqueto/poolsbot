@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { sql } from "drizzle-orm";
+import { db } from "../../src/persistence/db.js";
 import {
   getPriceHistorySince,
   insertPriceHistory,
@@ -49,5 +51,42 @@ describe("insertPriceHistoryIfDue", () => {
 
   it("lista vazia não vai ao banco", async () => {
     expect(await insertPriceHistoryIfDue([])).toBe(0);
+  });
+});
+
+describe("getPriceHistorySince com duas fontes", () => {
+  beforeEach(truncateAll);
+
+  // Base fixa: chamar Date.now() a cada t() fazia o esperado sair alguns ms
+  // depois do gravado.
+  const base = Date.now() - 10 * 3_600_000;
+  const t = (h: number) => new Date(base + h * 3_600_000);
+  const linha = (h: number, source: string) => ({ chain: "arbitrum", poolAddress: POOL_A, price: 79_000 + h, recordedAt: t(h), source });
+
+  // Medido em 11/09/2026: Dune e on-chain diferem ~12 bps nos mesmos minutos,
+  // e intercalados inflavam o σ do WBTC/USDC de 1,26% pra 2,12%/dia.
+  it("usa o Dune só antes da primeira leitura on-chain", async () => {
+    await insertPriceHistory([
+      linha(0, "dune_backfill"),
+      linha(1, "dune_backfill"),
+      linha(1.5, "onchain_backfill"),
+      linha(2, "dune_backfill"),
+      linha(2.5, "onchain_ingest"),
+    ]);
+    const h = await getPriceHistorySince("arbitrum", POOL_A, t(-1));
+    expect(h.map((p) => p.recordedAt.getTime())).toEqual([t(0), t(1), t(1.5), t(2.5)].map((d) => d.getTime()));
+  });
+
+  it("pool que só tem Dune mantém o Dune inteiro", async () => {
+    await insertPriceHistory([linha(0, "dune_backfill"), linha(1, "dune_backfill")]);
+    expect(await getPriceHistorySince("arbitrum", POOL_A, t(-1))).toHaveLength(2);
+  });
+
+  // Nada é apagado: a regra é de leitura.
+  it("o Dune continua no banco", async () => {
+    await insertPriceHistory([linha(0, "onchain_backfill"), linha(1, "dune_backfill")]);
+    await getPriceHistorySince("arbitrum", POOL_A, t(-1));
+    const [{ n }] = (await db.execute<{ n: string }>(sql`select count(*) as n from pool_price_history`)).rows as { n: string }[];
+    expect(Number(n)).toBe(2);
   });
 });

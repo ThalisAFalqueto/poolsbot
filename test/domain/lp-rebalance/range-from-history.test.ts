@@ -81,6 +81,29 @@ describe("estimateVolatility", () => {
     expect(razao).toBeLessThan(2);
   });
 
+  // O caso real de 11/09/2026: um backfill gravado por cima da ingestão deixou
+  // 360 pares a segundos de distância no WBTC/USDC e inflou o σ em 23%. Aqui a
+  // leitura duplicada difere 0,1% da original — com Δt de 30s, isso vira um
+  // "retorno diário" de ~17%.
+  it("ignora leitura duplicada colada na anterior", () => {
+    const limpo = walk(10, 0.02);
+    const sujo = limpo.flatMap((p, i) => [
+      p,
+      { recordedAt: new Date(p.recordedAt.getTime() + 30_000), price: p.price * (i % 2 === 0 ? 1.001 : 0.999) },
+    ]);
+    const a = estimateVolatility(limpo)!.dailyVolatility;
+    const b = estimateVolatility(sujo)!.dailyVolatility;
+    expect(Math.abs(b / a - 1)).toBeLessThan(0.1);
+  });
+
+  // Duplicata com o MESMO preço erra pro outro lado: retorno zero puxa o σ pra
+  // baixo, e a faixa sugerida sairia estreita demais.
+  it("duplicata de preço idêntico não puxa o σ pra baixo", () => {
+    const limpo = walk(10, 0.02);
+    const sujo = limpo.flatMap((p) => [p, { recordedAt: new Date(p.recordedAt.getTime() + 30_000), price: p.price }]);
+    expect(estimateVolatility(sujo)!.dailyVolatility).toBeCloseTo(estimateVolatility(limpo)!.dailyVolatility, 10);
+  });
+
   it("reporta quantos dias e pontos sustentam a estimativa", () => {
     const e = estimateVolatility(walk(10, 0.02));
     expect(e!.observedDays).toBeGreaterThan(9);
