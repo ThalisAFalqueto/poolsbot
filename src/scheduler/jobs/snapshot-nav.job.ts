@@ -183,6 +183,50 @@ async function detectCashFlows(
   return rows;
 }
 
+/** Patrimônio medido agora, somado sobre wallets e chains. */
+export type LiveNav = { navUsdc: number; idleUsdc: number; positionsUsdc: number; feesUsdc: number; at: Date };
+
+/**
+ * Patrimônio AGORA, somando todas as wallets e chains — sem gravar foto.
+ *
+ * Existe pro fechamento de um período EM ANDAMENTO (/dia, /semana, /mes).
+ * Antes o fechamento era a foto das 00:00, e o que acontecia durante o dia só
+ * aparecia no dia seguinte: o usuário fechou uma posição às 13:13 de
+ * 11/09/2026 e o /mes seguiu mostrando o patrimônio da meia-noite.
+ *
+ * Detecta e GRAVA os fluxos de caixa até agora (idempotente por uniqueId, ver
+ * insertCashFlows). Não é opcional: um patrimônio ao vivo sem os aportes de
+ * hoje contaria o aporte como lucro.
+ *
+ * Lança se qualquer wallet ou chain falhar — patrimônio parcial é pior que
+ * nenhum, e quem chama cai na última foto, avisando.
+ */
+export async function measureNavNow(userId: number): Promise<LiveNav | null> {
+  const wallets = (await listUserWallets()).filter((w) => w.userId === userId).map((w) => w.address as Address);
+  const activeChains = getActiveChains().filter((c) => chains[c].usdcAddress !== undefined);
+  if (wallets.length === 0 || activeChains.length === 0) return null;
+
+  const at = new Date();
+  const total = { navUsdc: 0, idleUsdc: 0, positionsUsdc: 0, feesUsdc: 0 };
+  for (const chain of activeChains) {
+    const resolvePrice = createTokenPriceResolver(chain);
+    const allowlist = buildTokenAllowlist({
+      positionTokens: await listKnownTokenAddresses(userId, chain),
+      referenceTokens: [chains[chain].usdcAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
+    });
+    for (const wallet of wallets) {
+      const s = await snapshotWallet(userId, chain, wallet, utcDate(at), resolvePrice);
+      if (!s) throw new Error(`patrimônio incompleto em ${chain} (${wallet})`);
+      total.navUsdc += s.navUsdc;
+      total.idleUsdc += s.idleUsdc;
+      total.positionsUsdc += s.positionsUsdc;
+      total.feesUsdc += s.feesUsdc;
+      await insertCashFlows(await detectCashFlows(userId, chain, wallet, allowlist, resolvePrice));
+    }
+  }
+  return { ...total, at };
+}
+
 export async function snapshotNavJob(): Promise<string> {
   const walletRows = await listUserWallets();
   if (walletRows.length === 0) return "nenhuma wallet vinculada.";

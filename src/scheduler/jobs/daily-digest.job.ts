@@ -13,12 +13,8 @@ import {
 import { formatMarketRegime } from "../../domain/market/format-regime.js";
 import { calculatePeriodReport } from "../../domain/portfolio/period-report.js";
 import { formatWeeklySummary } from "../../domain/portfolio/format-report.js";
-import { isoDate, weekBounds } from "../../domain/portfolio/periods.js";
-import {
-  findLatestNavSnapshotUpTo,
-  listCashFlowsBetween,
-  listNavSnapshotsBetween,
-} from "../../persistence/repositories/wallet-nav.repository.js";
+import { weekBounds } from "../../domain/portfolio/periods.js";
+import { loadPeriodNav } from "../../data/period-nav.js";
 import { preparePairComparison } from "../../bot/commands/comparar.js";
 import { measurePoolYields } from "../../data/onchain/measure-pool-yield.js";
 import { shouldDropAsOutlier } from "../../domain/yield-optimizer/outlier.js";
@@ -61,25 +57,20 @@ const DIA_DO_FECHAMENTO_SEMANAL = 1;
 // perguntar.
 async function blocoSemanal(userId: number, now: Date): Promise<DigestBlock | null> {
   const periodo = weekBounds(new Date(now.getTime() - 7 * 86400000));
-  const diaAnterior = isoDate(new Date(periodo.start.getTime() - 86400000));
-  const ultimoDia = isoDate(new Date(periodo.end.getTime() - 86400000));
-
-  const [abertura, fotos, fluxos] = await Promise.all([
-    findLatestNavSnapshotUpTo(userId, diaAnterior),
-    listNavSnapshotsBetween(userId, isoDate(periodo.start), ultimoDia),
-    listCashFlowsBetween(userId, periodo.start, periodo.end),
-  ]);
-  const fechamento = fotos.at(-1);
-  if (!abertura || !fechamento) return null;
+  // Semana já fechada: sem medição ao vivo. Abertura e fechamento são as fotos
+  // das 00:00 de segunda a segunda — ver data/period-nav.ts pro deslocamento
+  // de um dia que existia aqui até 11/09/2026.
+  const medido = await loadPeriodNav(userId, periodo, now);
+  if (medido.status !== "ok") return null;
 
   const report = calculatePeriodReport({
-    navStartUsdc: abertura.navUsdc,
-    navEndUsdc: fechamento.navUsdc,
-    flows: fluxos.map((f) => ({ direction: f.direction, valueUsdc: f.valueUsdc, occurredAt: f.occurredAt })),
-    periodStart: periodo.start,
-    periodEnd: periodo.end,
+    navStartUsdc: medido.abertura.navUsdc,
+    navEndUsdc: medido.fechamento.navUsdc,
+    flows: medido.fluxos.map((f) => ({ direction: f.direction, valueUsdc: f.valueUsdc, occurredAt: f.occurredAt })),
+    periodStart: medido.abertura.at,
+    periodEnd: medido.fechamento.at,
   });
-  return { kind: "text", text: formatWeeklySummary(periodo, report, fechamento.navUsdc) };
+  return { kind: "text", text: formatWeeklySummary(periodo, report, medido.fechamento.navUsdc) };
 }
 
 function utcDate(now: Date): string {

@@ -89,6 +89,65 @@ export async function findLatestNavSnapshotUpTo(userId: number, date: string): P
   return row ?? null;
 }
 
+/** Patrimônio de UMA foto, somado sobre todas as wallets e chains, com o
+ *  instante em que foi medido. */
+export type NavPointRow = {
+  date: string;
+  recordedAt: Date;
+  navUsdc: number;
+  idleUsdc: number;
+  positionsUsdc: number;
+  feesUsdc: number;
+};
+
+/**
+ * A foto mais recente ATÉ uma data (inclusive), SOMADA sobre todas as linhas
+ * dela — uma por (wallet, chain).
+ *
+ * Substitui findLatestNavSnapshotUpTo nos relatórios, que tinha dois defeitos
+ * (achados em 11/09/2026):
+ *   1. devolvia UMA linha (limit 1): com duas wallets ou duas chains, o
+ *      patrimônio seria o de uma só;
+ *   2. não trazia o instante da medição. A foto com data D é tirada às 00:00
+ *      de D — é o patrimônio no INÍCIO do dia —, e sem o instante os
+ *      relatórios a tratavam como o fim do dia (ver data/period-nav.ts).
+ *
+ * recordedAt é o MENOR instante entre as linhas: é a partir dele que um aporte
+ * pode ter ficado de fora de alguma wallet da foto.
+ */
+export async function findNavAt(userId: number, date: string): Promise<NavPointRow | null> {
+  const [ultima] = await db
+    .select({ date: walletNavSnapshots.date })
+    .from(walletNavSnapshots)
+    .where(and(eq(walletNavSnapshots.userId, userId), lte(walletNavSnapshots.date, date)))
+    .orderBy(desc(walletNavSnapshots.date))
+    .limit(1);
+  if (!ultima) return null;
+
+  const linhas = await db
+    .select({
+      recordedAt: walletNavSnapshots.recordedAt,
+      navUsdc: walletNavSnapshots.navUsdc,
+      idleUsdc: walletNavSnapshots.idleUsdc,
+      positionsUsdc: walletNavSnapshots.positionsUsdc,
+      feesUsdc: walletNavSnapshots.feesUsdc,
+    })
+    .from(walletNavSnapshots)
+    .where(and(eq(walletNavSnapshots.userId, userId), eq(walletNavSnapshots.date, ultima.date)));
+
+  return linhas.reduce<NavPointRow>(
+    (t, l) => ({
+      date: t.date,
+      recordedAt: l.recordedAt < t.recordedAt ? l.recordedAt : t.recordedAt,
+      navUsdc: t.navUsdc + l.navUsdc,
+      idleUsdc: t.idleUsdc + l.idleUsdc,
+      positionsUsdc: t.positionsUsdc + l.positionsUsdc,
+      feesUsdc: t.feesUsdc + l.feesUsdc,
+    }),
+    { date: ultima.date, recordedAt: linhas[0]!.recordedAt, navUsdc: 0, idleUsdc: 0, positionsUsdc: 0, feesUsdc: 0 }
+  );
+}
+
 export type CashFlowInput = {
   userId: number;
   walletAddress: string;
