@@ -19,6 +19,12 @@ vi.mock("../../src/notifications/dispatch-signal.js", () => ({
 // achou nada dentro da janela) — o job já trata isso como não-fatal (loga
 // e segue); mocado à parte pra não depender do getPublicClient real, que
 // o mock de client.js acima não fornece.
+// Recibo on-chain do fechamento — null faz o arquivamento cair no snapshot,
+// que é o caminho que estes testes exercitam.
+vi.mock("../../src/data/onchain/close-receipt.js", () => ({
+  readV3CloseReceipt: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../../src/data/onchain/position-gas.js", () => ({
   findMintGasCost: vi.fn().mockResolvedValue(null),
   findCloseGasCost: vi.fn().mockResolvedValue(null),

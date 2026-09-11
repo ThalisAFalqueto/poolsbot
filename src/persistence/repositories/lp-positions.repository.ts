@@ -1,3 +1,4 @@
+import type { CloseReceipt } from "../../domain/lp-rebalance/close-receipt.js";
 import { and, asc, desc, eq, ilike, not, or, type SQL } from "drizzle-orm";
 import { db } from "../db.js";
 import {
@@ -227,27 +228,56 @@ export function hasCompleteSnapshot(
 
 export type CloseGasResult = { closeGasNative: number; closeGasTxHashes: string[] };
 
-// Arquiva em closed_lp_positions qualquer candidato com snapshot completo
-// (ver hasCompleteSnapshot) — sem isso, fechar uma posição apagava todo o
-// histórico dela (achado real, 21/08/2026: usuário ia fechar a posição
-// WBTC/USDC real e perder IL/fees/P&L acumulados sem nenhum rastro).
+// Arquiva em closed_lp_positions os candidatos que têm de onde tirar um
+// recibo: de preferência a transação de fechamento (receiptsByPositionId, ver
+// data/onchain/close-receipt.ts), senão o snapshot do último /positions
+// (hasCompleteSnapshot). Sem nenhum dos dois não há recibo honesto a gravar.
+//
+// A ORDEM IMPORTA. Até 11/09/2026 só existia o snapshot, e ele é gravado
+// quando o usuário roda /positions, não no fechamento. O recibo da #5683732
+// saiu com final e fees de um momento anterior ao fechamento (107,58 e 1,57
+// em vez de 108,35 e 1,86). O snapshot virou reserva, e o recibo grava de onde
+// veio (receiptSource) pra o /closed poder avisar.
+//
 // closeGasByPositionId é opcional por posição — nem toda posição tem gas de
-// close encontrado (ver findCloseGasCost), e isso não impede o arquivamento
-// do resto do P&L. Desde o upgrade da Alchemy pra Pay As You Go (range
-// ilimitado de eth_getLogs, 23/08/2026), essa busca é rápida — quem chama
-// já espera (await) o resultado antes de arquivar, sem precisar de nenhum
-// mecanismo de preenchimento posterior.
+// close encontrado (ver findCloseGasCost), e isso não impede o arquivamento.
 export async function archiveStalePositions(
   candidates: StalePositionCandidate[],
   closeGasByPositionId: Map<number, CloseGasResult>,
-  nativeGasSymbol: string
+  nativeGasSymbol: string,
+  receiptsByPositionId: Map<number, CloseReceipt> = new Map()
 ): Promise<void> {
-  const toArchive = candidates.filter(hasCompleteSnapshot);
+  const toArchive = candidates.filter((p) => receiptsByPositionId.has(p.id) || hasCompleteSnapshot(p));
   if (toArchive.length === 0) return;
 
   await db.insert(closedLpPositions).values(
     toArchive.map((p) => {
       const closeGas = closeGasByPositionId.get(p.id);
+      const r = receiptsByPositionId.get(p.id);
+      const valores = r
+        ? {
+            openedAt: r.openedAt,
+            closedAt: r.closedAt,
+            entryValueToken1: r.entryValueToken1,
+            finalPositionValueToken1: r.finalPositionValueToken1,
+            finalFeesValueToken1: r.finalFeesValueToken1,
+            hodlValueToken1: r.hodlValueToken1,
+            ilToken1: r.ilToken1,
+            totalPnlToken1: r.totalPnlToken1,
+            feesAmount0: r.feesAmount0,
+            feesAmount1: r.feesAmount1,
+            receiptSource: "onchain",
+          }
+        : {
+            openedAt: p.lastKnownEntryDate!,
+            entryValueToken1: p.lastKnownEntryValueToken1!,
+            finalPositionValueToken1: p.lastKnownPositionValueToken1!,
+            finalFeesValueToken1: p.lastKnownFeesValueToken1!,
+            hodlValueToken1: p.lastKnownHodlValueToken1!,
+            ilToken1: p.lastKnownIlToken1!,
+            totalPnlToken1: p.lastKnownTotalPnlToken1!,
+            receiptSource: "snapshot",
+          };
       return {
         userId: p.userId,
         chain: p.chain,
@@ -257,13 +287,7 @@ export async function archiveStalePositions(
         token0Symbol: p.token0Symbol,
         token1Symbol: p.token1Symbol,
         token1Address: p.token1Address,
-        openedAt: p.lastKnownEntryDate,
-        entryValueToken1: p.lastKnownEntryValueToken1!,
-        finalPositionValueToken1: p.lastKnownPositionValueToken1!,
-        finalFeesValueToken1: p.lastKnownFeesValueToken1!,
-        hodlValueToken1: p.lastKnownHodlValueToken1!,
-        ilToken1: p.lastKnownIlToken1!,
-        totalPnlToken1: p.lastKnownTotalPnlToken1!,
+        ...valores,
         mintGasNative: p.mintGasNative,
         mintGasTxHash: p.mintGasTxHash,
         closeGasNative: closeGas?.closeGasNative ?? null,
@@ -500,11 +524,17 @@ export type ClosedPositionRow = {
   closeGasNative: number | null;
   closeGasTxHashes: string | null;
   nativeGasSymbol: string | null;
+  receiptSource: string | null;
+  feesAmount0: number | null;
+  feesAmount1: number | null;
 };
 
 export async function listClosedPositions(userId: number): Promise<ClosedPositionRow[]> {
   return db
     .select({
+      receiptSource: closedLpPositions.receiptSource,
+      feesAmount0: closedLpPositions.feesAmount0,
+      feesAmount1: closedLpPositions.feesAmount1,
       chain: closedLpPositions.chain,
       tokenId: closedLpPositions.tokenId,
       protocol: closedLpPositions.protocol,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildClosedBlock, formatGasLine } from "../../src/bot/commands/closed.js";
+import { buildClosedBlock, formatFeesTotal, formatGasLine } from "../../src/bot/commands/closed.js";
 import type { ClosedPositionRow } from "../../src/persistence/repositories/lp-positions.repository.js";
 
 function makeRow(overrides: Partial<ClosedPositionRow> = {}): ClosedPositionRow {
@@ -24,6 +24,9 @@ function makeRow(overrides: Partial<ClosedPositionRow> = {}): ClosedPositionRow 
     closeGasNative: 0.0000123,
     closeGasTxHashes: "0xdef",
     nativeGasSymbol: "ETH",
+    receiptSource: "onchain",
+    feesAmount0: 0.0000031,
+    feesAmount1: 0.11,
     ...overrides,
   };
 }
@@ -75,5 +78,51 @@ describe("buildClosedBlock", () => {
   it("P&L negativo aparece com sinal, positivo com +", () => {
     expect(buildClosedBlock(makeRow({ totalPnlToken1: -0.22 }), null)).toContain("P&L total (com fees): -0.22");
     expect(buildClosedBlock(makeRow({ totalPnlToken1: 1.5 }), null)).toContain("P&L total (com fees): +1.50");
+  });
+
+  // A taxa em quantidade de cada token é o que dá pra conferir no explorer
+  // (aba de tokens transferidos da tx de fechamento). Só existe quando o
+  // recibo veio da chain.
+  it("mostra a taxa em quantidade de cada token quando o recibo veio da chain", () => {
+    expect(buildClosedBlock(makeRow(), null)).toContain("Fees recebidas: 0.31 USDC (0.00000310 WBTC + 0.110 USDC)");
+  });
+
+  // O defeito de 11/09/2026: recibo de snapshot é do último /positions, não do
+  // fechamento. Onde ainda é o caso, o texto tem que dizer.
+  it("recibo de snapshot avisa que pode estar defasado", () => {
+    const bloco = buildClosedBlock(makeRow({ receiptSource: "snapshot", feesAmount0: null, feesAmount1: null }), null);
+    expect(bloco).toContain("podem estar defasados");
+    expect(bloco).not.toContain("WBTC +");
+  });
+
+  it("recibo antigo, sem fonte gravada, também avisa", () => {
+    expect(buildClosedBlock(makeRow({ receiptSource: null, feesAmount0: null, feesAmount1: null }), null)).toContain("podem estar defasados");
+  });
+
+  it("recibo on-chain não carrega o aviso", () => {
+    expect(buildClosedBlock(makeRow(), null)).not.toContain("defasados");
+  });
+});
+
+describe("formatFeesTotal", () => {
+  it("soma as taxas de todas as posições fechadas", () => {
+    const total = formatFeesTotal([makeRow({ finalFeesValueToken1: 1.86 }), makeRow({ finalFeesValueToken1: 0.83 })]);
+    expect(total).toContain("2.69 USDC em 2 posições");
+  });
+
+  // Somar USDC com WETH não quer dizer nada.
+  it("separa por token1 em vez de misturar moedas", () => {
+    const total = formatFeesTotal([makeRow({ finalFeesValueToken1: 1 }), makeRow({ token1Symbol: "WETH", finalFeesValueToken1: 0.001 })])!;
+    expect(total).toContain("1.00 USDC em 1 posição");
+    expect(total).toContain("0.00 WETH em 1 posição");
+  });
+
+  it("diz quantas parcelas da soma vieram de snapshot", () => {
+    const total = formatFeesTotal([makeRow(), makeRow({ receiptSource: "snapshot" })]);
+    expect(total).toContain("1 com valor de snapshot");
+  });
+
+  it("sem posição fechada não há total", () => {
+    expect(formatFeesTotal([])).toBeNull();
   });
 });

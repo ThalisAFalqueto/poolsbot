@@ -134,6 +134,13 @@
       "when": 1788813115855,
       "tag": "0018_thick_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789133841650,
+      "tag": "0019_daily_madripoor",
+      "breakpoints": true
     }
   ]
 }

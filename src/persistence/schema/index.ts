@@ -230,6 +230,16 @@ export const closedLpPositions = pgTable(
     closeGasNative: doublePrecision("close_gas_native"),
     closeGasTxHashes: text("close_gas_tx_hashes"), // hashes separados por vírgula
     nativeGasSymbol: text("native_gas_symbol"), // "ETH" | "POL" — copiado de chains[chain] no momento do arquivamento
+    // De onde vieram os valores do recibo. "onchain" = eventos do contrato
+    // (ver data/onchain/close-receipt.ts). "snapshot" ou null = último
+    // /positions antes do fechamento, que pode estar defasado — foi o que
+    // produziu o recibo errado da #5683732 (11/09/2026). O /closed diz qual é.
+    receiptSource: text("receipt_source"),
+    // Taxa em QUANTIDADE de cada token (Collect − DecreaseLiquidity), não só o
+    // valor em token1 — é o que dá pra conferir no explorer. Null quando o
+    // recibo veio do snapshot, que só guardava o valor.
+    feesAmount0: doublePrecision("fees_amount0"),
+    feesAmount1: doublePrecision("fees_amount1"),
   },
   (table) => ({
     userIdx: index("closed_lp_positions_user_id_idx").on(table.userId),

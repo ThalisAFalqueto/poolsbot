@@ -41,6 +41,8 @@ import {
   type CloseGasResult,
 } from "../../persistence/repositories/lp-positions.repository.js";
 import { insertPriceHistoryIfDue } from "../../persistence/repositories/pool-price-history.repository.js";
+import { readV3CloseReceipt } from "../../data/onchain/close-receipt.js";
+import type { CloseReceipt } from "../../domain/lp-rebalance/close-receipt.js";
 import { getNearEdgeNotifiedAt, setNearEdgeNotifiedAt } from "../../persistence/repositories/lp-positions.repository.js";
 import { confirmPositionClosed } from "../../data/onchain/confirm-closed.js";
 
@@ -223,15 +225,36 @@ export async function checkPositionsJob(): Promise<string> {
           console.warn(`[check-positions] sumiram da lista mas NÃO foram arquivadas: ${naoConfirmadas.join(", ")}`);
         }
 
+        // RECIBO lido dos EVENTOS do contrato, não do snapshot do último
+        // /positions — ver domain/lp-rebalance/close-receipt.ts pro caso real
+        // (#5683732, 11/09/2026) em que o snapshot deixou final e fees
+        // defasados. Só V3: no V4 não há DecreaseLiquidity/Collect. V4, ou
+        // leitura que falhou, cai no snapshot, e o /closed avisa.
+        const receiptsByPositionId = new Map<number, CloseReceipt>();
+        for (const candidate of staleCandidates) {
+          if (candidate.protocol !== "v3") continue;
+          try {
+            const recibo = await readV3CloseReceipt({
+              chainKey: candidate.chain as ChainKey,
+              tokenId: BigInt(candidate.tokenId),
+              poolAddress: candidate.poolAddress as `0x${string}`,
+              decimals0: candidate.token0Decimals,
+              decimals1: candidate.token1Decimals,
+              mintTxHash: candidate.mintGasTxHash,
+            });
+            if (recibo) receiptsByPositionId.set(candidate.id, recibo);
+            else console.warn(`[check-positions] eventos de #${candidate.tokenId} não formam recibo completo — usando o snapshot`);
+          } catch (err) {
+            console.error(`[check-positions] falha ao ler recibo on-chain de #${candidate.tokenId} — usando o snapshot:`, err);
+          }
+        }
+
         // Custo REAL de gas do close (não estimativa) — só busca pra
-        // candidatos que de fato vão ser arquivados (sem snapshot completo,
-        // não vale gastar uma chamada RPC à toa). Com o range ilimitado da
-        // Alchemy Pay As You Go (upgrade 23/08/2026), essa busca é rápida —
-        // espera (await) direto antes de arquivar, sem precisar de
-        // background/preenchimento posterior.
+        // candidatos que de fato vão ser arquivados (sem recibo on-chain nem
+        // snapshot completo, não vale gastar uma chamada RPC à toa).
         const closeGasByPositionId = new Map<number, CloseGasResult>();
         for (const candidate of staleCandidates) {
-          if (!hasCompleteSnapshot(candidate)) continue;
+          if (!receiptsByPositionId.has(candidate.id) && !hasCompleteSnapshot(candidate)) continue;
           try {
             const closeGas =
               candidate.protocol === "v3"
@@ -246,7 +269,7 @@ export async function checkPositionsJob(): Promise<string> {
             console.error(`[check-positions] falha ao buscar gas de close da posição #${candidate.tokenId}:`, err);
           }
         }
-        await archiveStalePositions(staleCandidates, closeGasByPositionId, chains[chain].nativeGasSymbol);
+        await archiveStalePositions(staleCandidates, closeGasByPositionId, chains[chain].nativeGasSymbol, receiptsByPositionId);
         // Apaga só o que foi CONFIRMADO fechado, não tudo que sumiu da lista.
         await deleteConfirmedClosedPositions(
           user.userId,

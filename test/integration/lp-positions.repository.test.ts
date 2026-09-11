@@ -1,3 +1,4 @@
+import type { CloseReceipt } from "../../src/domain/lp-rebalance/close-receipt.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
 import { db } from "../../src/persistence/db.js";
@@ -385,6 +386,78 @@ describe("lp-positions.repository", () => {
 
       const count = await db.execute<{ count: string }>(sql`SELECT count(*) FROM lp_position_il_alert_state`);
       expect(Number(count.rows[0]?.count)).toBe(1);
+    });
+  });
+
+  // Recibo lido da chain (ver domain/lp-rebalance/close-receipt.ts). Tem
+  // prioridade sobre o snapshot, que é do último /positions e não do
+  // fechamento — foi assim que a #5683732 saiu com final e fees defasados.
+  describe("archiveStalePositions com recibo on-chain", () => {
+    const recibo: CloseReceipt = {
+      openedAt: new Date("2026-09-05T21:26:51Z"),
+      closedAt: new Date("2026-09-11T13:13:05Z"),
+      entryValueToken1: 108.15,
+      finalPositionValueToken1: 108.35,
+      feesAmount0: 0.000373,
+      feesAmount1: 0.929059,
+      finalFeesValueToken1: 1.86,
+      hodlValueToken1: 108.39,
+      ilToken1: -0.04,
+      totalPnlToken1: 2.06,
+    };
+    const snapshotDefasado = {
+      entryValueToken1: 108.16,
+      positionValueToken1: 107.58,
+      feesValueToken1: 1.57,
+      hodlValueToken1: 107.72,
+      ilToken1: -0.14,
+      totalPnlToken1: 0.99,
+      entryDate: new Date("2026-09-05T21:30:02Z"),
+    };
+
+    it("usa o recibo on-chain em vez do snapshot", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-r1");
+      const [p] = await upsertPositions([makeInput({ userId: user.id, tokenId: "5683732" })]);
+      await updatePositionSnapshot(p!.id, snapshotDefasado);
+
+      const candidates = await listStalePositionCandidates(user.id, CHAIN, []);
+      await archiveStalePositions(candidates, new Map(), "ETH", new Map([[p!.id, recibo]]));
+
+      const [row] = await listClosedPositions(user.id);
+      expect(row!.finalPositionValueToken1).toBeCloseTo(108.35, 2);
+      expect(row!.finalFeesValueToken1).toBeCloseTo(1.86, 2);
+      expect(row!.totalPnlToken1).toBeCloseTo(2.06, 2);
+      expect(row!.feesAmount1).toBeCloseTo(0.929059, 6);
+      expect(row!.receiptSource).toBe("onchain");
+      // A data real do fechamento, não a do ciclo que arquivou.
+      expect(row!.closedAt.toISOString()).toBe("2026-09-11T13:13:05.000Z");
+      expect(row!.openedAt.toISOString()).toBe("2026-09-05T21:26:51.000Z");
+    });
+
+    it("sem recibo, cai no snapshot e grava que veio dele", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-r2");
+      const [p] = await upsertPositions([makeInput({ userId: user.id, tokenId: "7" })]);
+      await updatePositionSnapshot(p!.id, snapshotDefasado);
+
+      const candidates = await listStalePositionCandidates(user.id, CHAIN, []);
+      await archiveStalePositions(candidates, new Map(), "ETH");
+
+      const [row] = await listClosedPositions(user.id);
+      expect(row!.finalFeesValueToken1).toBeCloseTo(1.57, 2);
+      expect(row!.receiptSource).toBe("snapshot");
+      expect(row!.feesAmount0).toBeNull();
+    });
+
+    // Antes, posição que nunca passou por /positions não era arquivada — não
+    // havia snapshot. Com o recibo da chain ela tem de onde tirar os valores.
+    it("arquiva posição sem snapshot quando há recibo on-chain", async () => {
+      const user = await findOrCreateUserByTelegramChatId("chat-r3");
+      const [p] = await upsertPositions([makeInput({ userId: user.id, tokenId: "8" })]);
+
+      const candidates = await listStalePositionCandidates(user.id, CHAIN, []);
+      await archiveStalePositions(candidates, new Map(), "ETH", new Map([[p!.id, recibo]]));
+
+      expect(await listClosedPositions(user.id)).toHaveLength(1);
     });
   });
 });

@@ -69,6 +69,12 @@ export function formatGasLine(row: ClosedPositionRow, ethPriceInToken1: number |
   return `Gas: abertura ${mint} · fechamento ${close} · total ${totalText}${approxText}`;
 }
 
+// Quantidade de token: 2 casas a partir de 1, 3 algarismos significativos
+// abaixo — toFixed(2) zeraria 0,000373 WETH de taxa.
+function formatTokenAmount(value: number): string {
+  return Math.abs(value) >= 1 ? value.toFixed(2) : value.toPrecision(3);
+}
+
 export function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: number | null): string {
   const name = row.label ?? `#${row.tokenId}`;
   const opened = row.openedAt.toLocaleDateString("pt-BR");
@@ -77,12 +83,53 @@ export function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: numbe
   // Mesma convenção do /positions: só marca o V4, já que V3 é o caso comum.
   const protocolTag = row.protocol === "v4" ? " [V4]" : "";
 
+  // Em quantidade de cada token, quando o recibo veio da chain — é o número
+  // que dá pra conferir no explorer, na aba de tokens transferidos.
+  const feesEmTokens =
+    row.feesAmount0 !== null && row.feesAmount1 !== null
+      ? ` (${formatTokenAmount(row.feesAmount0)} ${row.token0Symbol} + ${formatTokenAmount(row.feesAmount1)} ${row.token1Symbol})`
+      : "";
+
+  // Recibo de snapshot = valores do último /positions, não do fechamento. Foi
+  // assim que a #5683732 saiu com final e fees defasados; onde ainda é o caso
+  // (V4, ou leitura on-chain que falhou), o texto tem que dizer.
+  const avisoFonte =
+    row.receiptSource === "onchain"
+      ? []
+      : ["   ⚠️ Valores do último /positions antes do fechamento, não da transação de fechamento — podem estar defasados."];
+
   return [
     `${row.token0Symbol}/${row.token1Symbol}${protocolTag} (${name}) — ${opened} a ${closed}`,
-    `   Entrada: ${formatPrice(row.entryValueToken1)} ${row.token1Symbol} · Final: ${formatPrice(row.finalPositionValueToken1)} ${row.token1Symbol} · Fees: ${formatPrice(row.finalFeesValueToken1)} ${row.token1Symbol}`,
+    `   Entrada: ${formatPrice(row.entryValueToken1)} ${row.token1Symbol} · Final: ${formatPrice(row.finalPositionValueToken1)} ${row.token1Symbol}`,
+    `   Fees recebidas: ${formatPrice(row.finalFeesValueToken1)} ${row.token1Symbol}${feesEmTokens}`,
     `   P&L total (com fees): ${row.totalPnlToken1 >= 0 ? "+" : ""}${formatPrice(row.totalPnlToken1)} ${row.token1Symbol} · vs HOLD: ${vsHold >= 0 ? "+" : ""}${formatPrice(vsHold)} ${row.token1Symbol}`,
     `   ${formatGasLine(row, ethPriceInToken1)}`,
+    ...avisoFonte,
   ].join("\n");
+}
+
+/**
+ * Soma das taxas de todas as posições fechadas, por token1 — somar USDC com
+ * WETH não quer dizer nada. Responde "quanto de taxa eu já ganhei?", que
+ * antes exigia somar bloco a bloco.
+ */
+export function formatFeesTotal(rows: ClosedPositionRow[]): string | null {
+  const porToken = new Map<string, { soma: number; n: number; snapshot: number }>();
+  for (const r of rows) {
+    const t = porToken.get(r.token1Symbol) ?? { soma: 0, n: 0, snapshot: 0 };
+    t.soma += r.finalFeesValueToken1;
+    t.n += 1;
+    if (r.receiptSource !== "onchain") t.snapshot += 1;
+    porToken.set(r.token1Symbol, t);
+  }
+  if (porToken.size === 0) return null;
+  return [...porToken]
+    .map(
+      ([simbolo, t]) =>
+        `💰 Taxas recebidas no total: ${formatPrice(t.soma)} ${simbolo} em ${t.n} ${t.n === 1 ? "posição" : "posições"}` +
+        (t.snapshot > 0 ? ` (${t.snapshot} com valor de snapshot, possivelmente defasado)` : "")
+    )
+    .join("\n");
 }
 
 export async function closedCommand(ctx: CommandContext<Context>) {
@@ -91,7 +138,7 @@ export async function closedCommand(ctx: CommandContext<Context>) {
 
   if (rows.length === 0) {
     await ctx.reply(
-      "Nenhuma posição fechada registrada ainda. Só fica registrado aqui o que foi arquivado a partir de um /positions rodado antes do fechamento — ver /status se uma posição sumiu sem aparecer aqui."
+      "Nenhuma posição fechada registrada ainda. Posições V3 são registradas a partir da própria transação de fechamento; V4 só se houve um /positions antes de fechar — ver /status se uma posição sumiu sem aparecer aqui."
     );
     return;
   }
@@ -106,5 +153,6 @@ export async function closedCommand(ctx: CommandContext<Context>) {
     })
   );
 
-  await ctx.reply(["Posições de LP fechadas:", "", ...blocks].join("\n\n"));
+  const total = formatFeesTotal(rows);
+  await ctx.reply(["Posições de LP fechadas:", "", ...blocks, ...(total ? [total] : [])].join("\n\n"));
 }
