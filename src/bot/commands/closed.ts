@@ -70,9 +70,13 @@ export function formatGasLine(row: ClosedPositionRow, ethPriceInToken1: number |
 }
 
 // Quantidade de token: 2 casas a partir de 1, 3 algarismos significativos
-// abaixo — toFixed(2) zeraria 0,000373 WETH de taxa.
+// abaixo — toFixed(2) zeraria 0,000373 WETH de taxa. Não usa toPrecision:
+// abaixo de 1e-6 ele cai em notação científica, e taxa de WBTC vive lá
+// ("3.30e-7 WBTC" saiu no /closed real em 11/09/2026).
 function formatTokenAmount(value: number): string {
-  return Math.abs(value) >= 1 ? value.toFixed(2) : value.toPrecision(3);
+  if (value === 0) return "0";
+  if (Math.abs(value) >= 1) return value.toFixed(2);
+  return value.toFixed(2 - Math.floor(Math.log10(Math.abs(value))));
 }
 
 export function buildClosedBlock(row: ClosedPositionRow, ethPriceInToken1: number | null): string {

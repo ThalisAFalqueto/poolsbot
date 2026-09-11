@@ -99,6 +99,14 @@ describe("buildClosedBlock", () => {
     expect(buildClosedBlock(makeRow({ receiptSource: null, feesAmount0: null, feesAmount1: null }), null)).toContain("podem estar defasados");
   });
 
+  // Taxa de WBTC fica abaixo de 1e-6, onde toPrecision vira notação
+  // científica — saiu "3.30e-7 WBTC" no /closed real.
+  it("taxa minúscula não vira notação científica", () => {
+    const bloco = buildClosedBlock(makeRow({ feesAmount0: 3.3e-7, feesAmount1: 0.029 }), null);
+    expect(bloco).toContain("0.000000330 WBTC");
+    expect(bloco).not.toMatch(/e-\d/);
+  });
+
   it("recibo on-chain não carrega o aviso", () => {
     expect(buildClosedBlock(makeRow(), null)).not.toContain("defasados");
   });
