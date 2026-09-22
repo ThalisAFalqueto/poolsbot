@@ -12,6 +12,8 @@ const APPROX_BLOCK_TIME_SECONDS: Record<ChainKey, number> = {
   base: 2,
   optimism: 2,
   polygon: 2,
+  // Medido na chain em 22/09/2026 (100.000 blocos): 0,101s por bloco.
+  robinhood: 0.1,
 };
 
 // Histórico: o free tier da Alchemy só aceitava até 10 blocos por chamada

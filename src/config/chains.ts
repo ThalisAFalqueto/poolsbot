@@ -1,4 +1,4 @@
-import type { Chain } from "viem";
+import { defineChain, type Chain } from "viem";
 import { arbitrum, base, optimism, polygon } from "viem/chains";
 import { env } from "./env.js";
 
@@ -45,6 +45,30 @@ const ARBITRUM_UNISWAP_V4 = {
   stateView: "0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990",
 } as const;
 
+// Robinhood Chain (L2 Arbitrum Orbit, chain id 4663, gas em ETH). NÃO está em
+// viem/chains, então é definida aqui; RPC e id conferidos na doc oficial
+// (docs.robinhood.com/chain/connecting) em 22/09/2026.
+//
+// Os endereços do Uniswap V3 aqui NÃO são os canônicos: a factory canônica
+// simplesmente não existe nessa chain (getPool revertia). Foram achados
+// ON-CHAIN, não em doc: varrendo PoolCreated(WETH, USDG) apareceu a factory
+// abaixo, e os eventos Mint do pool ETH/USDG mostram que o dono das 2.708
+// posições é o PositionManager abaixo — cujo NFT tem símbolo UNI-V3-POS e
+// cujo .factory() aponta de volta pra mesma factory. Ou seja: deploy V3
+// padrão, só com endereços próprios.
+const ROBINHOOD_UNISWAP_V3 = {
+  factory: "0x1f7d7550B1b028f7571E69A784071F0205FD2EfA",
+  nonfungiblePositionManager: "0x73991a25C818Bf1f1128dEAaB1492D45638DE0D3",
+} as const;
+
+const robinhoodChain = defineChain({
+  id: 4663,
+  name: "Robinhood Chain",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: { default: { http: ["https://rpc.mainnet.chain.robinhood.com"] } },
+  blockExplorers: { default: { name: "Blockscout", url: "https://robinhoodchain.blockscout.com" } },
+});
+
 // viemChain tipado como Chain (não o literal específico de cada objeto de
 // viem/chains) — evita que o registry fique com N tipos de PublicClient
 // mutuamente incompatíveis (um por chain), o que quebraria getPublicClient
@@ -66,7 +90,7 @@ export const chains = {
     // (não o USDC.e bridged, que é outro contrato). Confirmado on-chain antes
     // de escrever aqui — name "USD Coin", symbol "USDC", 6 decimais —, não
     // digitado de memória (ver feedback_never_type_addresses_from_memory).
-    usdcAddress: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as `0x${string}` | undefined,
+    quoteStableAddress: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as `0x${string}` | undefined,
     // Tokens aceitos no patrimônio/fluxo de caixa mesmo que NUNCA tenham
     // aparecido numa posição — tipicamente a moeda com que o usuário aporta.
     // Achado testando com dado real: o primeiro aporte dele foi em USD₮0 e
@@ -89,7 +113,7 @@ export const chains = {
     // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
     // endereço entre chains). O snapshot de patrimônio simplesmente pula
     // chains sem esse campo.
-    usdcAddress: undefined as `0x${string}` | undefined,
+    quoteStableAddress: undefined as `0x${string}` | undefined,
     trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.baseRpcUrl,
     nativeGasSymbol: "ETH",
@@ -107,7 +131,7 @@ export const chains = {
     // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
     // endereço entre chains). O snapshot de patrimônio simplesmente pula
     // chains sem esse campo.
-    usdcAddress: undefined as `0x${string}` | undefined,
+    quoteStableAddress: undefined as `0x${string}` | undefined,
     trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.optimismRpcUrl,
     nativeGasSymbol: "ETH",
@@ -132,10 +156,29 @@ export const chains = {
     // (mesma disciplina de uniswapV4 abaixo: nunca assumir portabilidade de
     // endereço entre chains). O snapshot de patrimônio simplesmente pula
     // chains sem esse campo.
-    usdcAddress: undefined as `0x${string}` | undefined,
+    quoteStableAddress: undefined as `0x${string}` | undefined,
     trustedTokens: [] as readonly `0x${string}`[],
     rpcUrl: env.polygonRpcUrl,
     nativeGasSymbol: "POL",
+    uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
+  },
+  robinhood: {
+    viemChain: robinhoodChain,
+    defillamaChainName: "Robinhood Chain",
+    uniswapV3: ROBINHOOD_UNISWAP_V3,
+    // WETH da chain — confirmado on-chain (symbol "WETH", 18 casas); é o
+    // token0 do pool ETH/USDG.
+    wethAddress: "0x0bd7d308f8e1639fab988df18a8011f41eacad73",
+    // AQUI A MOEDA DE CONTA NÃO É USDC: essa chain não tem USDC. Varri os 34
+    // tokens das pools listadas (22/09/2026) e os únicos dólares são USDG,
+    // USDe, syrupUSDG e spUSDG. O patrimônio nesta chain é medido em USDG
+    // (Paxos, lastro 1:1 com atestado mensal). Confirmado on-chain: symbol
+    // "USDG", 6 casas.
+    quoteStableAddress: "0x5fc5360d0400a0fd4f2af552add042d716f1d168" as `0x${string}` | undefined,
+    trustedTokens: [] as readonly `0x${string}`[],
+    rpcUrl: env.robinhoodRpcUrl,
+    nativeGasSymbol: "ETH",
+    // Sem V4 confirmado nessa chain — mesma disciplina das outras.
     uniswapV4: undefined as typeof ARBITRUM_UNISWAP_V4 | undefined,
   },
 } as const;

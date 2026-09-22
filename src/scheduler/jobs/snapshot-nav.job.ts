@@ -95,7 +95,7 @@ async function snapshotWallet(
 ): Promise<NavSnapshotInput | null> {
   const allowlist = buildTokenAllowlist({
     positionTokens: await listKnownTokenAddresses(userId, chain),
-    referenceTokens: [chains[chain].usdcAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
+    referenceTokens: [chains[chain].quoteStableAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
   });
 
   const balances = await fetchWalletBalances(chain, wallet, [...allowlist] as Address[]);
@@ -203,7 +203,7 @@ export type LiveNav = { navUsdc: number; idleUsdc: number; positionsUsdc: number
  */
 export async function measureNavNow(userId: number): Promise<LiveNav | null> {
   const wallets = (await listUserWallets()).filter((w) => w.userId === userId).map((w) => w.address as Address);
-  const activeChains = getActiveChains().filter((c) => chains[c].usdcAddress !== undefined);
+  const activeChains = getActiveChains().filter((c) => chains[c].quoteStableAddress !== undefined);
   if (wallets.length === 0 || activeChains.length === 0) return null;
 
   const at = new Date();
@@ -212,7 +212,7 @@ export async function measureNavNow(userId: number): Promise<LiveNav | null> {
     const resolvePrice = createTokenPriceResolver(chain);
     const allowlist = buildTokenAllowlist({
       positionTokens: await listKnownTokenAddresses(userId, chain),
-      referenceTokens: [chains[chain].usdcAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
+      referenceTokens: [chains[chain].quoteStableAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
     });
     for (const wallet of wallets) {
       const s = await snapshotWallet(userId, chain, wallet, utcDate(at), resolvePrice);
@@ -234,7 +234,7 @@ export async function snapshotNavJob(): Promise<string> {
   const date = utcDate(new Date());
   // Só chains com USDC confirmado on-chain participam (ver chains.ts) — sem
   // moeda de conta não há como medir patrimônio.
-  const activeChains = getActiveChains().filter((c) => chains[c].usdcAddress !== undefined);
+  const activeChains = getActiveChains().filter((c) => chains[c].quoteStableAddress !== undefined);
   if (activeChains.length === 0) return "nenhuma chain com USDC configurado.";
 
   const byUser = new Map<number, Address[]>();
@@ -245,6 +245,7 @@ export async function snapshotNavJob(): Promise<string> {
   let snapshotCount = 0;
   let flowCount = 0;
   let skipped = 0;
+  let adiados = 0;
 
   for (const [userId, wallets] of byUser) {
     if (await hasSnapshotForDate(userId, date)) {
@@ -252,21 +253,30 @@ export async function snapshotNavJob(): Promise<string> {
       continue; // já fotografado hoje — não gasta RPC
     }
 
+    // FOTO É TUDO OU NADA. Com mais de uma chain ativa, gravar o que deu certo
+    // produziria um patrimônio faltando pedaço — e o /dia e o /mes comparam
+    // fotos: uma foto incompleta vira prejuízo falso num dia e lucro falso no
+    // outro. Melhor não ter foto (o relatório sabe lidar com isso e diz de que
+    // dia é a que usou) do que ter uma errada. Como o job roda a cada 15min e
+    // só sai cedo quando JÁ existe foto do dia, ele tenta de novo sozinho.
+    const snapshots: NavSnapshotInput[] = [];
+    let incompleto = false;
+
     for (const chain of activeChains) {
       const resolvePrice = createTokenPriceResolver(chain);
       try {
-        const snapshots: NavSnapshotInput[] = [];
         for (const wallet of wallets) {
           const snapshot = await snapshotWallet(userId, chain, wallet, date, resolvePrice);
           if (snapshot) snapshots.push(snapshot);
+          else incompleto = true; // já logou o motivo lá dentro
         }
-        await insertNavSnapshots(snapshots);
-        snapshotCount += snapshots.length;
 
+        // Fluxos são independentes da foto e idempotentes (dedup por uniqueId):
+        // grava o que deu, mesmo que a foto do dia fique pra depois.
         for (const wallet of wallets) {
           const allowlist = buildTokenAllowlist({
             positionTokens: await listKnownTokenAddresses(userId, chain),
-            referenceTokens: [chains[chain].usdcAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
+            referenceTokens: [chains[chain].quoteStableAddress, chains[chain].wethAddress, ...chains[chain].trustedTokens],
           });
           const flows = await detectCashFlows(userId, chain, wallet, allowlist, resolvePrice);
           await insertCashFlows(flows);
@@ -274,16 +284,27 @@ export async function snapshotNavJob(): Promise<string> {
         }
       } catch (err) {
         // Falha numa chain não pode derrubar as outras nem os outros usuários
-        // — mesmo isolamento do check-positions.
+        // — mesmo isolamento do check-positions —, mas invalida a foto do dia.
+        incompleto = true;
         console.error(`[snapshot-nav] falha em ${chain} pro usuário ${userId}:`, err);
       }
     }
+
+    if (incompleto) {
+      adiados += 1;
+      console.warn(`[snapshot-nav] foto de ${date} adiada pro usuário ${userId}: alguma chain não respondeu`);
+      continue;
+    }
+    await insertNavSnapshots(snapshots);
+    snapshotCount += snapshots.length;
   }
 
   const summary =
-    skipped > 0 && snapshotCount === 0
-      ? `foto de hoje (${date}) já existia, nada a fazer.`
-      : `${snapshotCount} foto(s) de patrimônio em ${date}, ${flowCount} fluxo(s) de caixa conhecidos.`;
+    adiados > 0
+      ? `foto de ${date} adiada pra ${adiados} usuário(s): chain sem resposta; tenta de novo no próximo ciclo.`
+      : skipped > 0 && snapshotCount === 0
+        ? `foto de hoje (${date}) já existia, nada a fazer.`
+        : `${snapshotCount} foto(s) de patrimônio em ${date}, ${flowCount} fluxo(s) de caixa conhecidos.`;
   console.log(`[snapshot-nav] ${summary}`);
   return summary;
 }
