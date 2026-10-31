@@ -67,6 +67,15 @@ const robinhoodChain = defineChain({
   nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: ["https://rpc.mainnet.chain.robinhood.com"] } },
   blockExplorers: { default: { name: "Blockscout", url: "https://robinhoodchain.blockscout.com" } },
+  // Sem isto, todo multicall do bot falha ("chain does not support contract
+  // multicall3") e as posições nunca são lidas — viem só agrega quando a chain
+  // declara o endereço. Confirmado ON-CHAIN em 22/09/2026: o Multicall3
+  // canônico está deployado aqui (3.808 bytes) e responde.
+  //
+  // Ele devolve getBlockNumber() = 26.033.393 com a chain em 69.698.378, e
+  // isso está CERTO: em chain Arbitrum Orbit, block.number dentro da EVM é o
+  // bloco da L1 Ethereum, não o da L2. Não confundir com contrato errado.
+  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
 });
 
 // viemChain tipado como Chain (não o literal específico de cada objeto de
